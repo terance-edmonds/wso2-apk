@@ -134,7 +134,6 @@ public class APIClient {
                     }
                 }
             }
-
             _ = check self.setRoute(apiArtifact, apkConf, createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), uniqueId, PRODUCTION_TYPE, organization);
             _ = check self.setRoute(apiArtifact, apkConf, createdEndpoints.hasKey(SANDBOX_TYPE) ? createdEndpoints.get(SANDBOX_TYPE) : (), uniqueId, SANDBOX_TYPE, organization);
             string|json generatedSwagger = check self.retrieveGeneratedSwaggerDefinition(apkConf, definition);
@@ -183,6 +182,7 @@ public class APIClient {
         }
         return hosts;
     }
+
     isolated function isPolicyEmpty(APIOperationPolicies? policies) returns boolean {
         if policies is APIOperationPolicies {
             APKRequestOperationPolicy[]? request = policies.request;
@@ -274,10 +274,10 @@ public class APIClient {
         string apiVersionHash = crypto:hashSha1(api.'version.toBytes()).toBase16();
         string organizationHash = crypto:hashSha1(organization.name.toBytes()).toBase16();
         map<string> labels = {
-            [API_NAME_HASH_LABEL] : apiNameHash,
-            [API_VERSION_HASH_LABEL] : apiVersionHash,
-            [ORGANIZATION_HASH_LABEL] : organizationHash,
-            [MANAGED_BY_HASH_LABEL] : MANAGED_BY_HASH_LABEL_VALUE
+            [API_NAME_HASH_LABEL]: apiNameHash,
+            [API_VERSION_HASH_LABEL]: apiVersionHash,
+            [ORGANIZATION_HASH_LABEL]: organizationHash,
+            [MANAGED_BY_HASH_LABEL]: MANAGED_BY_HASH_LABEL_VALUE
         };
         return labels;
     }
@@ -322,7 +322,7 @@ public class APIClient {
                     labels: self.getLabels(apkConf, organization)
                 }
             };
-            configMap.binaryData = {[CONFIGMAP_DEFINITION_KEY] : check string:fromBytes(base64EncodedContent)};
+            configMap.binaryData = {[CONFIGMAP_DEFINITION_KEY]: check string:fromBytes(base64EncodedContent)};
             apiArtifact.definition = configMap;
         } else {
             return compressedContent.cause();
@@ -502,7 +502,7 @@ public class APIClient {
             k8sAPI.spec.sandbox = [{routeRefs: sandboxRoutes}];
         }
         if apkConf.id != () {
-            k8sAPI.metadata["annotations"] = {[API_UUID_ANNOTATION] : <string>apkConf.id};
+            k8sAPI.metadata["annotations"] = {[API_UUID_ANNOTATION]: <string>apkConf.id};
         }
         if apkConf.additionalProperties is APKConf_additionalProperties[] {
             model:APIProperties[] properties = [];
@@ -532,6 +532,7 @@ public class APIClient {
     private isolated function retrieveAuthenticationRefName(APKConf apkConf, string 'type, commons:Organization organization) returns string {
         return self.getUniqueIdForAPI(apkConf.name, apkConf.'version, organization) + "-" + 'type + "-authentication";
     }
+
     private isolated function setRoute(model:APIArtifact apiArtifact, APKConf apkConf, model:Endpoint? endpoint, string uniqueId, string endpointType, commons:Organization organization) returns commons:APKError|error? {
         APKOperations[] apiOperations = apkConf.operations ?: [];
         APKOperations[][] operationsArray = [];
@@ -1449,7 +1450,7 @@ public class APIClient {
                 // When user adds basic auth endpoint security username and password should be provided.
                 // When user adds api key endpoint security api key name and api key value should be provided.
                 BasicEndpointSecurity|APIKeyEndpointSecurity? securityType = endpointSecurity.securityType;
-                log:printDebug("Security Type: "+ securityType.toString());
+                log:printDebug("Security Type: " + securityType.toString());
 
                 if securityType is BasicEndpointSecurity {
                     securityConfig = {
@@ -1468,7 +1469,7 @@ public class APIClient {
                             name: <string>securityType.apiKeyNameKey,
                             'in: <string>securityType.'in,
                             valueFrom: {
-                                name: <string>securityType.secretName, 
+                                name: <string>securityType.secretName,
                                 valueKey: <string>securityType.apiKeyValueKey
                             }
                         }
@@ -1967,7 +1968,7 @@ public class APIClient {
     }
 
     public isolated function retrieveAIRateLimitPolicyName(string apiID, string targetRef) returns string {
-        return "airl-" + apiID + "-" + targetRef;        
+        return "airl-" + apiID + "-" + targetRef;
     }
 
     private isolated function validateAndRetrieveAPKConfiguration(json apkconfJson) returns APKConf|commons:APKError? {
@@ -2020,6 +2021,18 @@ public class APIClient {
     }
 
     public isolated function prepareArtifact(record {|byte[] fileContent; string fileName; anydata...;|}? apkConfiguration, record {|byte[] fileContent; string fileName; anydata...;|}? definitionFile, commons:Organization organization) returns commons:APKError|model:APIArtifact {
+        do {
+            [APKConf, string?] [apkConf, apiDefinition] = check self.prepareConfigurations(apkConfiguration, definitionFile);
+            APIClient apiclient = new ();
+            return check apiclient.generateK8sArtifacts(apkConf, apiDefinition, organization);
+        } on fail var e {
+            if e is commons:APKError {
+                return e;
+            }
+        }
+    }
+
+    public isolated function prepareConfigurations(record {|byte[] fileContent; string fileName; anydata...;|}? apkConfiguration, record {|byte[] fileContent; string fileName; anydata...;|}? definitionFile) returns [APKConf, string?]|commons:APKError {
         if apkConfiguration is () || definitionFile is () {
             return e909018("Required apkConfiguration, definitionFile and apiType are not provided");
         }
@@ -2052,16 +2065,15 @@ public class APIClient {
             if apkConf is () {
                 return e909022("apkConfiguration is not provided", ());
             }
-            APIClient apiclient = new ();
-            return check apiclient.generateK8sArtifacts(apkConf, apiDefinition, organization);
+
+            return [apkConf, apiDefinition];
         } on fail var e {
             if e is commons:APKError {
                 return e;
             }
-            log:printError("Error occured while prepare artifact", e);
-            return e909022("Error occured while prepare artifact", e);
+            log:printError("Error occured while prepare artifact configurations", e);
+            return e909022("Error occured while prepare artifact configurations", e);
         }
-
     }
 
     private isolated function getAPIName(string apiName, string apiType) returns string {

@@ -108,7 +108,7 @@ public type BasicEndpointSecurity record {
 };
 
 # Configuration for API Key Endpoint Security.
-# 
+#
 # + secretName - The name of the secret containing the API key.
 # + in - The mode of sending Ex: header/query.
 # + apiKeyNameKey - API key Header name.
@@ -485,7 +485,7 @@ public type APKConf record {
 };
 
 # Configuration for an AI provider.
-# 
+#
 # + name - The name of the AI provider.
 # + apiVersion - The version of the AI provider.
 public type AIProvider record {
@@ -592,3 +592,5 @@ public type ConfigMapRef record {
     string key;
 };
 
+# String type for all possible gateways.
+public type GatewayType "apk"|"kong";

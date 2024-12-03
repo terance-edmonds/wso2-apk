@@ -86,15 +86,15 @@ public class ConfigGeneratorClient {
                 return e909022("Error occured while validating the definition", ());
             }
         }
-on fail var e {
+        on fail var e {
             if e
-    is commons:APKError {
+            is commons:APKError {
                 return e;
             }
             return e909022("Internal error occured while creating APK conf", e);
         }
-
     }
+
     private isolated function prepareDefinitionBodyFromRequest(http:Request request) returns DefinitionBody|error {
         DefinitionBody definitionBody = {};
         mime:Entity[] payloadParts = check request.getBodyParts();
@@ -150,7 +150,7 @@ on fail var e {
         return e909044();
     }
 
-    public isolated function getGeneratedK8sResources(http:Request request, commons:Organization organization) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
+    public isolated function getGeneratedK8sResources(http:Request request, commons:Organization organization, GatewayType gateway) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
         GenerateK8sResourcesBody body = {};
         do {
             mime:Entity[] payload = check request.getBodyParts();
@@ -167,13 +167,26 @@ on fail var e {
                     body.apiType = check payLoadPart.getText();
                 }
             }
+
             APIClient apiclient = new ();
-            model:APIArtifact apiArtifact = check apiclient.prepareArtifact(body.apkConfiguration, body.definitionFile, organization);
-            [string, string] zipName = check self.zipAPIArtifact(apiArtifact.uniqueId, apiArtifact);
-            http:Response response = new;
-            response.setFileAsPayload(zipName[1]);
-            response.addHeader("Content-Disposition", "attachment; filename=" + zipName[0]);
-            return response;
+            match gateway {
+                "kong" => {
+                    [APKConf, string?] [apkConf, apiDefinition] = check apiclient.prepareConfigurations(body.apkConfiguration, body.definitionFile);
+                    GatewayKong gatewayKong = new (apkConf, apiDefinition, organization);
+                    string res = check gatewayKong.generateK8sArtifacts();
+                    http:Response response = new;
+                    response.setTextPayload(res);
+                    return response;
+                }
+                "apk"|_ => {
+                    model:APIArtifact apiArtifact = check apiclient.prepareArtifact(body.apkConfiguration, body.definitionFile, organization);
+                    [string, string] zipName = check self.zipAPIArtifact(apiArtifact.uniqueId, apiArtifact);
+                    http:Response response = new;
+                    response.setFileAsPayload(zipName[1]);
+                    response.addHeader("Content-Disposition", "attachment; filename=" + zipName[0]);
+                    return response;
+                }
+            }
         } on fail var e {
             if e is commons:APKError {
                 return e;

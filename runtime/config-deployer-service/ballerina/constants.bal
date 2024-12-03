@@ -93,3 +93,6 @@ const string APPLICATION_JSON_MEDIA_TYPE = "application/json";
 const string APPLICATION_YAML_MEDIA_TYPE = "application/yaml";
 const string ALL_MEDIA_TYPE = "*/*";
 const string AUTH_TYPE_JWT = "JWT";
+
+const DEFAULT_GATEWAY = "apk";
+public final string[] & readonly GATEWAY_TYPES = ["apk", "kong"];

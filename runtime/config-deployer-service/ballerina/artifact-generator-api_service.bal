@@ -1,6 +1,6 @@
 import ballerina/http;
-import wso2/apk_common_lib as commons;
 
+import wso2/apk_common_lib as commons;
 
 isolated service /api/configurator on ep0 {
     # Create API configuration file from api specification.
@@ -11,9 +11,10 @@ isolated service /api/configurator on ep0 {
     # BadRequestError (Bad Request. Invalid request or validation error.)
     # InternalServerErrorError (Internal Server Error.)
     isolated resource function post apis/'generate\-configuration(http:Request request) returns OkAnydata|BadRequestError|InternalServerErrorError|commons:APKError {
-        ConfigGeneratorClient apiclient = new ;
+        ConfigGeneratorClient apiclient = new;
         return check apiclient.getGeneratedAPKConf(request);
     }
+
     # Generate K8s Resources
     #
     # + organization - **Organization ID** of the organization the API belongs to. 
@@ -21,16 +22,22 @@ isolated service /api/configurator on ep0 {
     # + return - returns can be any of following types
     # BadRequestError (Bad Request. Invalid request or validation error.)
     # InternalServerErrorError (Internal Server Error.)
-    isolated resource function post apis/'generate\-k8s\-resources(string? organization, http:Request request) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
-        ConfigGeneratorClient apiclient = new ;
-        commons:Organization organizationObj  = {displayName: "default",
-        name: "default",
-        organizationClaimValue: "default",
-        uuid: "",
-        enabled: true};
+    isolated resource function post apis/'generate\-k8s\-resources(string? organization, string? gateway, http:Request request) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
+        GatewayType gatewayType = DEFAULT_GATEWAY;
+        ConfigGeneratorClient apiclient = new;
+        commons:Organization organizationObj = {
+            displayName: "default",
+            name: "default",
+            organizationClaimValue: "default",
+            uuid: "",
+            enabled: true
+        };
         if (organization is string) {
             organizationObj.name = organization;
         }
-        return check apiclient.getGeneratedK8sResources(request,organizationObj);
+        if (gateway is string && GATEWAY_TYPES.indexOf(gateway) != ()) {
+            gatewayType = <GatewayType>gateway;
+        }
+        return check apiclient.getGeneratedK8sResources(request, organizationObj, gatewayType);
     }
 }
