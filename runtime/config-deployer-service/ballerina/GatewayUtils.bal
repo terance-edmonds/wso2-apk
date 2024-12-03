@@ -96,14 +96,13 @@ class GatewayUtils {
         EndpointConfiguration? sandboxEndpointConfig = endpointConfigurations.sandbox;
     }
 
-    private isolated function createBackendRef(EndpointConfiguration endpointConfig) returns model:HTTPBackendRef {
+    private isolated function createBackendRef(EndpointConfiguration endpointConfig) returns model:HTTPBackendRef|error? {
         model:HTTPBackendRef backendRef = {
             kind: "Service",
             name: self.getHost(endpointConfig.endpoint),
             port: check self.getPort(endpointConfig.endpoint),
             group: ""
-        }
-
+        };
         return backendRef;
     }
 
@@ -151,7 +150,8 @@ class GatewayUtils {
                 return host;
             }
         }
-    
+    }
+
     private isolated function getPort(string|K8sService endpoint) returns int|error {
         string url;
         if endpoint is string {
