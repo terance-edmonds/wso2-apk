@@ -1,7 +1,9 @@
 import config_deployer_service.model;
 
+import ballerina/crypto;
 import ballerina/log;
 import ballerina/regex;
+import ballerina/uuid;
 
 import wso2/apk_common_lib as commons;
 
@@ -9,15 +11,16 @@ class GatewayModel {
     private APKConf apkConf;
     private string? apiDefinition;
     private commons:Organization organization;
-    private string uniqueId = "test-unique-id";
+    private string uniqueId = "";
 
     public isolated function init(APKConf conf, string? apiDefinition, commons:Organization organization) {
         self.apkConf = conf;
         self.apiDefinition = apiDefinition;
         self.organization = organization;
+        self.uniqueId = self.getUniqueId(conf.name, conf.version, organization);
     }
 
-    // generate the endpoints for each environment
+    // Prepare K8s artifacts
     public isolated function prepareArtifact() returns string|commons:APKError {
         do {
             map<model:Endpoint|()> createdEndpoints = {};
@@ -26,18 +29,27 @@ class GatewayModel {
                 createdEndpoints = check self.createEndpoints(endpointConfigurations, ());
             }
             model:HTTPRoute[] productionHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), PRODUCTION_TYPE);
+            model:HTTPRoute[] sandboxHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(SANDBOX_TYPE) ? createdEndpoints.get(SANDBOX_TYPE) : (), SANDBOX_TYPE);
             return productionHttpRoutes.toJsonString();
         } on fail var e {
-            log:printError("Internal Error occured", e);
-            return e909022("Internal Error occured", e);
+            log:printError("Internal Error occurred", e);
+            return e909022("Internal Error occurred", e);
         }
     }
 
+    // Get a unique ID for the config
+    public isolated function getUniqueId(string name, string 'version, commons:Organization organization) returns string {
+        string concatenatedString = string:'join("-", organization.name, name, 'version);
+        byte[] hashedValue = crypto:hashSha1(concatenatedString.toBytes());
+        return hashedValue.toBase16();
+    }
+
+    // Generate the routes
     public isolated function generateRoutes(model:Endpoint? endpoint, string endpointType) returns model:HTTPRoute[]|commons:APKError {
+        // Partition the http routes (max 8 rules per route)
         model:HTTPRoute[] httpRoutes = [];
         APKOperations[] apiOperations = self.apkConf.operations ?: [];
         APKOperations[][] operationsArray = [];
-        // partition the http routes (max 8 rules per route)
         int row = 0;
         int column = 0;
         foreach APKOperations item in apiOperations {
@@ -50,6 +62,7 @@ class GatewayModel {
         }
         int count = 1;
         foreach APKOperations[] item in operationsArray {
+            // Put each 8 set of operations into one http route
             APKOperations[] operations = item.clone();
             model:HTTPRoute httpRoute = check self.putRoutesForPartition(operations, endpoint, endpointType, count);
             httpRoutes.push(httpRoute);
@@ -58,7 +71,7 @@ class GatewayModel {
         return httpRoutes;
     }
 
-    // generate endpoints for each environment
+    // Generate endpoints for each environment
     private isolated function createEndpoints(EndpointConfigurations endpointConfigurations, string? endpointType) returns map<model:Endpoint>|error {
         map<model:Endpoint> createdEndpoints = {};
         EndpointConfiguration? productionEndpointConfig = endpointConfigurations.production;
@@ -66,37 +79,37 @@ class GatewayModel {
         if (endpointType == () || endpointType === SANDBOX_TYPE) {
             if (sandboxEndpointConfig is EndpointConfiguration) {
                 createdEndpoints[SANDBOX_TYPE] = {
-                    name: self.getHost(sandboxEndpointConfig.endpoint),
-                    url: self.constructURlFromService(sandboxEndpointConfig.endpoint)
+                    name: getHost(sandboxEndpointConfig.endpoint),
+                    url: constructURlFromService(sandboxEndpointConfig.endpoint)
                 };
             }
         }
         if (endpointType == () || endpointType === PRODUCTION_TYPE) {
             if (productionEndpointConfig is EndpointConfiguration) {
                 createdEndpoints[PRODUCTION_TYPE] = {
-                    name: self.getHost(productionEndpointConfig.endpoint),
-                    url: self.constructURlFromService(productionEndpointConfig.endpoint)
+                    name: getHost(productionEndpointConfig.endpoint),
+                    url: constructURlFromService(productionEndpointConfig.endpoint)
                 };
             }
         }
         return createdEndpoints;
     }
 
-    // create http route
+    // Put a set of operations into a http route
     private isolated function putRoutesForPartition(APKOperations[] operations, model:Endpoint? endpoint, string endpointType, int count) returns model:HTTPRoute|commons:APKError {
         model:HTTPRoute httpRoute = {
             metadata: {
                 name: self.uniqueId + "-" + endpointType + "-httproute-" + count.toString()
             },
             spec: {
-                parentRefs: self.generateAndRetrieveParentRefs(),
+                parentRefs: self.generateParentRefs(),
                 rules: check self.generateHTTPRouteRules(operations, endpoint, endpointType)
             }
         };
         return httpRoute;
     }
 
-    // generate http route rules
+    // Generate http route rules
     private isolated function generateHTTPRouteRules(APKOperations[]? operations, model:Endpoint? endpoint, string endpointType) returns model:HTTPRouteRule[]|commons:APKError {
         model:HTTPRouteRule[] httpRouteRules = [];
         if operations is APKOperations[] {
@@ -110,6 +123,7 @@ class GatewayModel {
         return httpRouteRules;
     }
 
+    // Generate http route rule
     private isolated function generateRouteRule(APKOperations operation, model:Endpoint? endpoint, string endpointType) returns model:HTTPRouteRule|()|commons:APKError {
         do {
             EndpointConfigurations? endpointConfig = operation.endpointConfigurations;
@@ -125,19 +139,27 @@ class GatewayModel {
                 }
             }
             if endpointToUse != () {
+                model:HTTPRouteFilter[] filters = [];
+                boolean hasRedirectPolicy = false;
+                [filters, hasRedirectPolicy] = self.generateFilters(endpointToUse, operation, endpointType);
                 model:HTTPRouteRule httpRouteRule = {
-                    matches: check self.retrieveHTTPMatches(operation, endpointType)
+                    matches: check self.retrieveHTTPMatches(operation, endpointType),
+                    filters: filters
                 };
+                if !hasRedirectPolicy {
+                    httpRouteRule.backendRefs = self.retrieveGeneratedBackend(endpointToUse, endpointType);
+                }
                 return httpRouteRule;
             } else {
                 return ();
             }
         } on fail var e {
-            log:printError("Internal Error occured", e);
-            return e909022("Internal Error occured", e);
+            log:printError("Internal Error occurred", e);
+            return e909022("Internal Error occurred", e);
         }
     }
 
+    // Retrieve the HTTP matches for a given operation
     private isolated function retrieveHTTPMatches(APKOperations operation, string endpointType) returns model:HTTPRouteMatch[]|error {
         model:HTTPRouteMatch[] httpRouteMatch = [];
         model:HTTPRouteMatch httpRoute = self.retrieveHttpRouteMatch(operation);
@@ -145,11 +167,13 @@ class GatewayModel {
         return httpRouteMatch;
     }
 
+    // Retrieve the HTTP match for a given operation
     private isolated function retrieveHttpRouteMatch(APKOperations operation) returns model:HTTPRouteMatch {
         return {method: <string>operation.verb, path: {'type: "RegularExpression", value: self.retrievePathPrefix(operation.target ?: "/*")}};
     }
 
-    public isolated function retrievePathPrefix(string operation) returns string {
+    // Retrieve the prepared path prefix
+    private isolated function retrievePathPrefix(string operation) returns string {
         string[] splitValues = regex:split(operation, "/");
         string generatedPath = "";
         if (operation == "/*") {
@@ -159,7 +183,7 @@ class GatewayModel {
         }
         foreach string pathPart in splitValues {
             if pathPart.trim().length() > 0 {
-                // path contains path param
+                // Path contains path param
                 if regex:matches(pathPart, "\\{.*\\}") {
                     generatedPath = generatedPath + "/" + regex:replaceAll(pathPart.trim(), "\\{.*\\}", "(.*)");
                 } else {
@@ -167,7 +191,6 @@ class GatewayModel {
                 }
             }
         }
-
         if generatedPath.endsWith("/*") {
             int lastSlashIndex = <int>generatedPath.lastIndexOf("/", generatedPath.length());
             generatedPath = generatedPath.substring(0, lastSlashIndex) + "(.*)";
@@ -175,7 +198,209 @@ class GatewayModel {
         return generatedPath.trim();
     }
 
-    private isolated function generateAndRetrieveParentRefs() returns model:ParentReference[] {
+    // Generate filters
+    private isolated function generateFilters(model:Endpoint endpoint, APKOperations operation, string endpointType) returns [model:HTTPRouteFilter[], boolean] {
+        model:HTTPRouteFilter[] routeFilters = [];
+        boolean hasRedirectPolicy = false;
+        APIOperationPolicies? operationPoliciesToUse = ();
+        APIOperationPolicies? operationPolicies = self.apkConf.apiPolicies;
+        if (operationPolicies is APIOperationPolicies && operationPolicies != {}) {
+            if operationPolicies.request is APKRequestOperationPolicy[] || operationPolicies.response is APKResponseOperationPolicy[] {
+                operationPoliciesToUse = self.apkConf.apiPolicies;
+            }
+        } else {
+            operationPoliciesToUse = operation.operationPolicies;
+        }
+        if operationPoliciesToUse is APIOperationPolicies {
+            APKRequestOperationPolicy[]? requestPolicies = operationPoliciesToUse.request;
+            APKResponseOperationPolicy[]? responsePolicies = operationPoliciesToUse.response;
+            if requestPolicies is APKRequestOperationPolicy[] && requestPolicies.length() > 0 {
+                model:HTTPRouteFilter[] requestHttpRouteFilters = [];
+                [requestHttpRouteFilters, hasRedirectPolicy] = self.extractHttpRouteFilter(endpoint, operation, requestPolicies, true);
+                routeFilters.push(...requestHttpRouteFilters);
+            }
+            if responsePolicies is APKResponseOperationPolicy[] && responsePolicies.length() > 0 {
+                model:HTTPRouteFilter[] responseHttpRouteFilters = [];
+                [responseHttpRouteFilters, _] = self.extractHttpRouteFilter(endpoint, operation, responsePolicies, false);
+                routeFilters.push(...responseHttpRouteFilters);
+            }
+        }
+        if !hasRedirectPolicy {
+            string generatedPath = self.generatePrefixMatch(endpoint, operation);
+            model:HTTPRouteFilter replacePathFilter = {
+                'type: "URLRewrite",
+                urlRewrite: {
+                    path: {
+                        'type: "ReplaceFullPath",
+                        replaceFullPath: generatedPath
+                    }
+                }
+            };
+            routeFilters.push(replacePathFilter);
+        }
+        return [routeFilters, hasRedirectPolicy];
+    }
+
+    private isolated function extractHttpRouteFilter(model:Endpoint endpoint, APKOperations operation, APKOperationPolicy[] operationPolicies, boolean isRequest) returns [model:HTTPRouteFilter[], boolean] {
+        model:HTTPRouteFilter[] httpRouteFilters = [];
+        model:HTTPHeader[] addHeaders = [];
+        model:HTTPHeader[] setHeaders = [];
+        string[] removeHeaders = [];
+        boolean hasRedirectPolicy = false;
+        foreach APKOperationPolicy policy in operationPolicies {
+            if policy is HeaderModifierPolicy {
+                HeaderModifierPolicyParameters policyParameters = policy.parameters;
+                match policy.policyName {
+                    AddHeader => {
+                        model:HTTPHeader addHeader = {
+                            name: policyParameters.headerName,
+                            value: <string>policyParameters.headerValue
+                        };
+                        addHeaders.push(addHeader);
+                    }
+                    SetHeader => {
+                        model:HTTPHeader setHeader = {
+                            name: policyParameters.headerName,
+                            value: <string>policyParameters.headerValue
+                        };
+                        setHeaders.push(setHeader);
+                    }
+                    RemoveHeader => {
+                        removeHeaders.push(policyParameters.headerName);
+                    }
+                }
+            } else if policy is RequestMirrorPolicy {
+                RequestMirrorPolicyParameters policyParameters = policy.parameters;
+                string[] urls = <string[]>policyParameters.urls;
+                foreach string url in urls {
+                    model:HTTPRouteFilter mirrorFilter = {'type: "RequestMirror"};
+                    if !isRequest {
+                        log:printError("Mirror filter cannot be appended as a response policy.");
+                    }
+                    int|error port = getPort(url);
+                    if port is int {
+                        model:BackendRef backendRef = self.retrieveGeneratedBackend(endpoint, "")[0];
+                        mirrorFilter.requestMirror = {
+                            backendRef: {
+                                name: backendRef.name,
+                                namespace: backendRef.namespace,
+                                group: backendRef.group,
+                                kind: backendRef.kind,
+                                port: backendRef.port
+                            }
+                        };
+                    }
+                    httpRouteFilters.push(mirrorFilter);
+                }
+            } else if policy is RequestRedirectPolicy {
+                hasRedirectPolicy = true;
+                if !isRequest {
+                    log:printError("Redirect filter cannot be appended as a response policy.");
+                }
+                RequestRedirectPolicyParameters policyParameters = policy.parameters;
+                string url = <string>policyParameters.url;
+                model:HTTPRouteFilter redirectFilter = {'type: "RequestRedirect"};
+                int|error port = getPort(url);
+                if port is int {
+                    redirectFilter.requestRedirect = {
+                        hostname: getHost(url),
+                        scheme: getProtocol(url),
+                        path: {
+                            'type: "ReplaceFullPath",
+                            replaceFullPath: getPath(url)
+                        }
+                    };
+                    if policyParameters.statusCode is int {
+                        int statusCode = <int>policyParameters.statusCode;
+                        redirectFilter.requestRedirect.statusCode = statusCode;
+                    }
+                }
+                httpRouteFilters.push(redirectFilter);
+            }
+        }
+        if isRequest {
+            model:HTTPHeaderFilter requestHeaderModifier = {};
+            if addHeaders != [] {
+                requestHeaderModifier.add = addHeaders;
+            }
+            if setHeaders != [] {
+                requestHeaderModifier.set = setHeaders;
+            }
+            if removeHeaders != [] {
+                requestHeaderModifier.remove = removeHeaders;
+            }
+
+            if addHeaders.length() > 0 || setHeaders.length() > 0 || removeHeaders.length() > 0 {
+                model:HTTPRouteFilter headerModifierFilter = {
+                    'type: "RequestHeaderModifier",
+                    requestHeaderModifier: requestHeaderModifier
+                };
+                httpRouteFilters.push(headerModifierFilter);
+            }
+        } else {
+            model:HTTPHeaderFilter responseHeaderModifier = {};
+            if addHeaders != [] {
+                responseHeaderModifier.add = addHeaders;
+            }
+            if setHeaders != [] {
+                responseHeaderModifier.set = setHeaders;
+            }
+            if removeHeaders != [] {
+                responseHeaderModifier.remove = removeHeaders;
+            }
+            if addHeaders.length() > 0 || setHeaders.length() > 0 || removeHeaders.length() > 0 {
+                model:HTTPRouteFilter headerModifierFilter = {
+                    'type: "ResponseHeaderModifier",
+                    responseHeaderModifier: responseHeaderModifier
+                };
+                httpRouteFilters.push(headerModifierFilter);
+            }
+        }
+        return [httpRouteFilters, hasRedirectPolicy];
+    }
+
+    private isolated function retrieveGeneratedBackend(model:Endpoint endpoint, string endpointType) returns model:HTTPBackendRef[] {
+        model:HTTPBackendRef httpBackend = {
+            kind: "Service",
+            name: <string>endpoint.name,
+            group: ""
+        };
+        return [httpBackend];
+    }
+
+    private isolated function generatePrefixMatch(model:Endpoint endpoint, APKOperations operation) returns string {
+        string target = operation.target ?: "/*";
+        string[] splitValues = regex:split(target, "/");
+        string generatedPath = "";
+        int pathparamCount = 1;
+        if (target == "/*") {
+            generatedPath = "\\1";
+        } else if (target == "/") {
+            generatedPath = "/";
+        } else {
+            foreach int i in 0 ..< splitValues.length() {
+                if splitValues[i].trim().length() > 0 {
+                    // path contains path param
+                    if regex:matches(splitValues[i], "\\{.*\\}") {
+                        generatedPath = generatedPath + "/" + regex:replaceAll(splitValues[i].trim(), "\\{.*\\}", "\\" + pathparamCount.toString());
+                        pathparamCount += 1;
+                    } else {
+                        generatedPath = generatedPath + "/" + splitValues[i];
+                    }
+                }
+            }
+        }
+        if generatedPath.endsWith("/*") {
+            int lastSlashIndex = <int>generatedPath.lastIndexOf("/", generatedPath.length());
+            generatedPath = generatedPath.substring(0, lastSlashIndex) + "///" + pathparamCount.toString();
+        }
+        if endpoint.serviceEntry {
+            return generatedPath.trim();
+        }
+        return generatedPath;
+    }
+
+    private isolated function generateParentRefs() returns model:ParentReference[] {
         string gatewayName = gatewayConfiguration.name;
         string listenerName = gatewayConfiguration.listenerName;
         model:ParentReference[] parentRefs = [];
@@ -184,43 +409,28 @@ class GatewayModel {
         return parentRefs;
     }
 
-    private isolated function constructURlFromService(string|K8sService endpoint) returns string {
-        if endpoint is string {
-            return endpoint;
-        } else {
-            return self.constructURlFromK8sService(endpoint);
-        }
+    private isolated function getLabels() returns map<string> {
+        string apiNameHash = crypto:hashSha1(self.apkConf.name.toBytes()).toBase16();
+        string apiVersionHash = crypto:hashSha1(self.apkConf.'version.toBytes()).toBase16();
+        string organizationHash = crypto:hashSha1(self.organization.name.toBytes()).toBase16();
+        map<string> labels = {
+            [API_NAME_HASH_LABEL]: apiNameHash,
+            [API_VERSION_HASH_LABEL]: apiVersionHash,
+            [ORGANIZATION_HASH_LABEL]: organizationHash,
+            [MANAGED_BY_HASH_LABEL]: MANAGED_BY_HASH_LABEL_VALUE
+        };
+        return labels;
     }
 
-    private isolated function constructURlFromK8sService(K8sService 'k8sService) returns string {
-        return <string>k8sService.protocol + "://" + string:'join(".", <string>k8sService.name, <string>k8sService.namespace, "svc.cluster.local") + ":" + k8sService.port.toString();
-    }
-
-    private isolated function getHost(string|K8sService endpoint) returns string {
-        string url;
-        if endpoint is string {
-            url = endpoint;
+    public isolated function getServiceUid(APKOperations? operation, string endpointType) returns string {
+        string concatenatedString = uuid:createType1AsString();
+        if (operation is APKOperations) {
+            return "service-" + concatenatedString + "-resource";
         } else {
-            url = self.constructURlFromK8sService(endpoint);
-        }
-        string host = "";
-        if url.startsWith("https://") {
-            host = url.substring(8, url.length());
-        } else if url.startsWith("http://") {
-            host = url.substring(7, url.length());
-        } else {
-            return "";
-        }
-        int? indexOfColon = host.indexOf(":", 0);
-        if indexOfColon is int {
-            return host.substring(0, indexOfColon);
-        } else {
-            int? indexOfSlash = host.indexOf("/", 0);
-            if indexOfSlash is int {
-                return host.substring(0, indexOfSlash);
-            } else {
-                return host;
-            }
+            concatenatedString = string:'join("-", self.organization.name, self.apkConf.name, self.'apkConf.'version, endpointType);
+            byte[] hashedValue = crypto:hashSha1(concatenatedString.toBytes());
+            concatenatedString = hashedValue.toBase16();
+            return "service-" + concatenatedString + "-api";
         }
     }
 
