@@ -13,8 +13,8 @@ public class GatewayKong {
 
     public isolated function generateK8sArtifacts() returns string|commons:APKError {
         do {
-            GatewayUtils gatewayUtils = new (self.apkConf, self.apiDefinition, self.organization);
-            return self.apkConf.toString();
+            GatewayModel gatewayModel = new (self.apkConf, self.apiDefinition, self.organization);
+            return gatewayModel.prepareArtifact();
         }
         on fail var e {
             if e is commons:APKError {
