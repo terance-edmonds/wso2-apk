@@ -23,7 +23,7 @@ isolated service /api/configurator on ep0 {
     # BadRequestError (Bad Request. Invalid request or validation error.)
     # InternalServerErrorError (Internal Server Error.)
     isolated resource function post apis/'generate\-k8s\-resources(string? organization, string? gateway, http:Request request) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
-        GatewayType gatewayType = DEFAULT_GATEWAY;
+        string gatewayType = DEFAULT_GATEWAY;
         ConfigGeneratorClient apiclient = new;
         commons:Organization organizationObj = {
             displayName: "default",
@@ -36,7 +36,7 @@ isolated service /api/configurator on ep0 {
             organizationObj.name = organization;
         }
         if (gateway is string && GATEWAY_TYPES.indexOf(gateway) != ()) {
-            gatewayType = <GatewayType>gateway;
+            gatewayType = gateway;
         }
         return check apiclient.getGeneratedK8sResources(request, organizationObj, gatewayType);
     }

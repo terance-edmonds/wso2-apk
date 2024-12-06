@@ -117,14 +117,14 @@ public class APIClient {
                                 resourceEndpointIdMap[SANDBOX_TYPE] = {
                                     name: "",
                                     serviceEntry: false,
-                                    url: self.constructURlFromService(sandboxEndpointConfig.endpoint)
+                                    url: constructURlFromService(sandboxEndpointConfig.endpoint)
                                 };
                             }
                             if productionEndpointConfig is EndpointConfiguration {
                                 resourceEndpointIdMap[PRODUCTION_TYPE] = {
                                     name: "",
                                     serviceEntry: false,
-                                    url: self.constructURlFromService(productionEndpointConfig.endpoint)
+                                    url: constructURlFromService(productionEndpointConfig.endpoint)
                                 };
                             }
                             _ = check self.populateAuthenticationMap(apiArtifact, apkConf, authentication, resourceEndpointIdMap, organization);
@@ -230,7 +230,7 @@ public class APIClient {
                 endpointIdMap[SANDBOX_TYPE] = {
                     name: backendService.metadata.name,
                     serviceEntry: false,
-                    url: self.constructURlFromService(sandboxEndpointConfig.endpoint)
+                    url: constructURlFromService(sandboxEndpointConfig.endpoint)
                 };
                 AIRatelimit? aiRatelimit = sandboxEndpointConfig.aiRatelimit;
                 if aiRatelimit is AIRatelimit && aiRatelimit.enabled {
@@ -249,7 +249,7 @@ public class APIClient {
                 endpointIdMap[PRODUCTION_TYPE] = {
                     name: backendService.metadata.name,
                     serviceEntry: false,
-                    url: self.constructURlFromService(productionEndpointConfig.endpoint)
+                    url: constructURlFromService(productionEndpointConfig.endpoint)
                 };
                 AIRatelimit? aiRatelimit = productionEndpointConfig.aiRatelimit;
                 if aiRatelimit is AIRatelimit && aiRatelimit.enabled {
@@ -265,7 +265,7 @@ public class APIClient {
         if endpoint is string {
             return endpoint;
         } else {
-            return self.constructURlFromK8sService(endpoint);
+            return constructURlFromK8sService(endpoint);
         }
     }
 
@@ -1039,8 +1039,8 @@ public class APIClient {
                     if !isRequest {
                         log:printError("Mirror filter cannot be appended as a response policy.");
                     }
-                    string host = self.getHost(url);
-                    int|error port = self.getPort(url);
+                    string host = getHost(url);
+                    int|error port = getPort(url);
                     if port is int {
                         model:Backend backendService = {
                             metadata: {
@@ -1055,7 +1055,7 @@ public class APIClient {
                                     }
                                 ],
                                 basePath: getPath(url),
-                                protocol: self.getProtocol(url)
+                                protocol: getProtocol(url)
                             }
                         };
                         apiArtifact.backendServices[backendService.metadata.name] = backendService;
@@ -1084,15 +1084,15 @@ public class APIClient {
                 RequestRedirectPolicyParameters policyParameters = policy.parameters;
                 string url = <string>policyParameters.url;
                 model:HTTPRouteFilter redirectFilter = {'type: "RequestRedirect"};
-                int|error port = self.getPort(url);
+                int|error port = getPort(url);
 
                 if port is int {
                     redirectFilter.requestRedirect = {
-                        hostname: self.getHost(url),
-                        scheme: self.getProtocol(url),
+                        hostname: getHost(url),
+                        scheme: getProtocol(url),
                         path: {
                             'type: "ReplaceFullPath",
-                            replaceFullPath: self.getPath(url)
+                            replaceFullPath: getPath(url)
                         }
                     };
                     if policyParameters.statusCode is int {
@@ -1177,23 +1177,6 @@ public class APIClient {
             return generatedPath.trim();
         }
         return generatedPath;
-    }
-
-    isolated function getPath(string url) returns string {
-        string host = "";
-        if url.startsWith("https://") {
-            host = url.substring(8, url.length());
-        } else if url.startsWith("http://") {
-            host = url.substring(7, url.length());
-        } else {
-            return "";
-        }
-        int? indexOfSlash = host.indexOf("/", 0);
-        if indexOfSlash is int {
-            return host.substring(indexOfSlash);
-        } else {
-            return "";
-        }
     }
 
     public isolated function retrievePathPrefix(string basePath, string 'version, string operation, commons:Organization organization) returns string {
@@ -1340,78 +1323,6 @@ public class APIClient {
         }
     }
 
-    isolated function getHost(string|K8sService endpoint) returns string {
-        string url;
-        if endpoint is string {
-            url = endpoint;
-        } else {
-            url = self.constructURlFromK8sService(endpoint);
-        }
-        string host = "";
-        if url.startsWith("https://") {
-            host = url.substring(8, url.length());
-        } else if url.startsWith("http://") {
-            host = url.substring(7, url.length());
-        } else {
-            return "";
-        }
-        int? indexOfColon = host.indexOf(":", 0);
-        if indexOfColon is int {
-            return host.substring(0, indexOfColon);
-        } else {
-            int? indexOfSlash = host.indexOf("/", 0);
-            if indexOfSlash is int {
-                return host.substring(0, indexOfSlash);
-            } else {
-                return host;
-            }
-        }
-    }
-
-    isolated function getProtocol(string|K8sService endpoint) returns string {
-        if endpoint is string {
-            return endpoint.startsWith("https://") ? "https" : "http";
-        } else {
-            return endpoint.protocol ?: "http";
-        }
-    }
-
-    isolated function getPort(string|K8sService endpoint) returns int|error {
-        string url;
-        if endpoint is string {
-            url = endpoint;
-        } else {
-            url = self.constructURlFromK8sService(endpoint);
-        }
-        string hostPort = "";
-        string protocol = "";
-        if url.startsWith("https://") {
-            hostPort = url.substring(8, url.length());
-            protocol = "https";
-        } else if url.startsWith("http://") {
-            hostPort = url.substring(7, url.length());
-            protocol = "http";
-        } else {
-            return -1;
-        }
-        int? indexOfSlash = hostPort.indexOf("/", 0);
-
-        if indexOfSlash is int {
-            hostPort = hostPort.substring(0, indexOfSlash);
-        }
-        int? indexOfColon = hostPort.indexOf(":");
-        if indexOfColon is int {
-            string port = hostPort.substring(indexOfColon + 1, hostPort.length());
-            return check int:fromString(port);
-        } else {
-            if protocol == "https" {
-                return 443;
-            } else {
-                return 80;
-            }
-        }
-    }
-
     isolated function handleK8sTimeout(model:Status errorStatus) returns commons:APKError {
         model:StatusDetails? details = errorStatus.details;
         if details is model:StatusDetails {
@@ -1434,12 +1345,12 @@ public class APIClient {
             spec: {
                 services: [
                     {
-                        host: self.getHost(endpointConfig.endpoint),
-                        port: check self.getPort(endpointConfig.endpoint)
+                        host: getHost(endpointConfig.endpoint),
+                        port: check getPort(endpointConfig.endpoint)
                     }
                 ],
                 basePath: endpointConfig.endpoint is string ? getPath(<string>endpointConfig.endpoint) : (),
-                protocol: self.getProtocol(endpointConfig.endpoint)
+                protocol: getProtocol(endpointConfig.endpoint)
             }
         };
         if endpointType == INTERCEPTOR_TYPE {
@@ -1864,7 +1775,7 @@ public class APIClient {
     }
 
     public isolated function getInterceptorBackendUid(APKConf apkConf, string endpointType, commons:Organization organization, string|K8sService backend) returns string {
-        string concatanatedString = string:'join("-", organization.name, apkConf.name, 'apkConf.'version, endpointType, self.constructURlFromService(backend));
+        string concatanatedString = string:'join("-", organization.name, apkConf.name, 'apkConf.'version, endpointType, constructURlFromService(backend));
         byte[] hashedValue = crypto:hashSha1(concatanatedString.toBytes());
         concatanatedString = hashedValue.toBase16();
         return "backend-" + concatanatedString + "-interceptor";

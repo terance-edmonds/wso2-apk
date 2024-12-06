@@ -150,7 +150,7 @@ public class ConfigGeneratorClient {
         return e909044();
     }
 
-    public isolated function getGeneratedK8sResources(http:Request request, commons:Organization organization, GatewayType gateway) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
+    public isolated function getGeneratedK8sResources(http:Request request, commons:Organization organization, string gateway) returns http:Response|BadRequestError|InternalServerErrorError|commons:APKError {
         GenerateK8sResourcesBody body = {};
         do {
             mime:Entity[] payload = check request.getBodyParts();

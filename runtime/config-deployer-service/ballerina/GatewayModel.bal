@@ -11,26 +11,34 @@ class GatewayModel {
     private APKConf apkConf;
     private string? apiDefinition;
     private commons:Organization organization;
+    private GatewayConfigurations gatewayConfigurations;
     private string uniqueId = "";
 
-    public isolated function init(APKConf conf, string? apiDefinition, commons:Organization organization) {
+    public isolated function init(APKConf conf, string? apiDefinition, commons:Organization organization, GatewayConfigurations gatewayConfigurations) {
         self.apkConf = conf;
         self.apiDefinition = apiDefinition;
         self.organization = organization;
+        self.gatewayConfigurations = gatewayConfigurations;
         self.uniqueId = self.getUniqueId(conf.name, conf.version, organization);
     }
 
     // Prepare K8s artifacts
-    public isolated function prepareArtifact() returns string|commons:APKError {
+    public isolated function prepareArtifact() returns GatewayModelArtifact|commons:APKError {
         do {
+            // Initiate gateway model artifacts object
+            GatewayModelArtifact gatewayModelArtifact = {uniqueId: self.uniqueId, name: self.apkConf.name, version: self.apkConf.version, organization: self.organization.name};
             map<model:Endpoint|()> createdEndpoints = {};
             EndpointConfigurations? endpointConfigurations = self.apkConf.endpointConfigurations;
             if (endpointConfigurations is EndpointConfigurations) {
                 createdEndpoints = check self.createEndpoints(endpointConfigurations, ());
             }
-            model:HTTPRoute[] productionHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), PRODUCTION_TYPE);
+            // create HTTP Route CRs
             model:HTTPRoute[] sandboxHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(SANDBOX_TYPE) ? createdEndpoints.get(SANDBOX_TYPE) : (), SANDBOX_TYPE);
-            return productionHttpRoutes.toJsonString();
+            gatewayModelArtifact.sandboxHttpRoutes = sandboxHttpRoutes;
+            model:HTTPRoute[] productionHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), PRODUCTION_TYPE);
+            gatewayModelArtifact.productionHttpRoutes = productionHttpRoutes;
+
+            return gatewayModelArtifact;
         } on fail var e {
             log:printError("Internal Error occurred", e);
             return e909022("Internal Error occurred", e);
@@ -102,8 +110,9 @@ class GatewayModel {
                 name: self.uniqueId + "-" + endpointType + "-httproute-" + count.toString()
             },
             spec: {
-                parentRefs: self.generateParentRefs(),
-                rules: check self.generateHTTPRouteRules(operations, endpoint, endpointType)
+                parentRefs: self.generateParentRefs(self.gatewayConfigurations),
+                rules: check self.generateHTTPRouteRules(operations, endpoint, endpointType),
+                hostnames: self.getHostNames(self.uniqueId, endpointType)
             }
         };
         return httpRoute;
@@ -147,7 +156,7 @@ class GatewayModel {
                     filters: filters
                 };
                 if !hasRedirectPolicy {
-                    httpRouteRule.backendRefs = self.retrieveGeneratedBackend(endpointToUse, endpointType);
+                    httpRouteRule.backendRefs = self.retrieveGeneratedBackendRefs(endpointToUse, endpointType);
                 }
                 return httpRouteRule;
             } else {
@@ -198,7 +207,16 @@ class GatewayModel {
         return generatedPath.trim();
     }
 
-    // Generate filters
+    private isolated function getHostNames(string uniqueId, string endpointType) returns string[] {
+        string[] hosts = [];
+        string environment = self.apkConf.environment ?: "";
+        string orgAndEnv = self.organization.name;
+        if environment != "" {
+            orgAndEnv = string:concat(orgAndEnv, "-", environment);
+        }
+        return hosts;
+    }
+
     private isolated function generateFilters(model:Endpoint endpoint, APKOperations operation, string endpointType) returns [model:HTTPRouteFilter[], boolean] {
         model:HTTPRouteFilter[] routeFilters = [];
         boolean hasRedirectPolicy = false;
@@ -279,7 +297,7 @@ class GatewayModel {
                     }
                     int|error port = getPort(url);
                     if port is int {
-                        model:BackendRef backendRef = self.retrieveGeneratedBackend(endpoint, "")[0];
+                        model:BackendRef backendRef = self.retrieveGeneratedBackendRefs(endpoint, "")[0];
                         mirrorFilter.requestMirror = {
                             backendRef: {
                                 name: backendRef.name,
@@ -359,7 +377,7 @@ class GatewayModel {
         return [httpRouteFilters, hasRedirectPolicy];
     }
 
-    private isolated function retrieveGeneratedBackend(model:Endpoint endpoint, string endpointType) returns model:HTTPBackendRef[] {
+    private isolated function retrieveGeneratedBackendRefs(model:Endpoint endpoint, string endpointType) returns model:HTTPBackendRef[] {
         model:HTTPBackendRef httpBackend = {
             kind: "Service",
             name: <string>endpoint.name,
@@ -400,7 +418,7 @@ class GatewayModel {
         return generatedPath;
     }
 
-    private isolated function generateParentRefs() returns model:ParentReference[] {
+    private isolated function generateParentRefs(GatewayConfigurations gatewayConfiguration) returns model:ParentReference[] {
         string gatewayName = gatewayConfiguration.name;
         string listenerName = gatewayConfiguration.listenerName;
         model:ParentReference[] parentRefs = [];
