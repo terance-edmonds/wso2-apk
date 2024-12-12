@@ -596,7 +596,7 @@ public type ConfigMapRef record {
 
 # Configuration for gateway model
 #
-public type GatewayModelArtifact record {|
+public type GatewayModelArtifact record {
     string name;
     string 'version;
     model:HTTPRoute[] productionHttpRoutes = [];
@@ -604,4 +604,55 @@ public type GatewayModelArtifact record {|
     string namespace?;
     string organization;
     string uniqueId;
+};
+
+# Kong plugin configuration.
+#
+# + apiVersion - The API version of the Kong plugin configuration. Default is "configuration.konghq.com/v1".
+# + kind - The kind of the Kong plugin. Default is "KongPlugin".
+# + metadata - Metadata about the Kong plugin.
+# + plugin - The type of the Kong plugin.
+public type KongPlugin record {|
+    string apiVersion = "configuration.konghq.com/v1";
+    string kind = "KongPlugin";
+    model:Metadata metadata;
+    string plugin;
 |};
+
+# Configuration for Kong rate limit plugin.
+#
+# + second - The rate limit per second.
+# + minute - The rate limit per minute.
+# + hour - The rate limit per hour.
+# + day - The rate limit per day.
+# + month - The rate limit per month.
+# + year - The rate limit per year.
+# + policy - The policy for rate limiting. Default is "local".
+public type KongRateLimitPluginConfig record {
+    int second?;
+    int minute?;
+    int hour?;
+    int day?;
+    int month?;
+    int year?;
+    string policy = "local";
+};
+
+# Kong rate limit plugin.
+#
+# + config - The configuration for the Kong rate limit plugin.
+public type KongRateLimitPlugin record {
+    *KongPlugin;
+    string plugin = "rate-limiting";
+    KongRateLimitPluginConfig config;
+};
+
+# Kong gateway artifact.
+#
+# + rateLimits - Array of Kong rate limit plugins
+# # Kong gateway artifact.
+#
+public type KongGatewayArtifact record {
+    *GatewayModelArtifact;
+    KongRateLimitPlugin[] rateLimits = [];
+};

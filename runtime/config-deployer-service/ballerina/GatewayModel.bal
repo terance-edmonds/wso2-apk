@@ -79,6 +79,21 @@ class GatewayModel {
         return httpRoutes;
     }
 
+    // Generate rate limit policy name
+    public isolated function generateRateLimitPolicyRefName(APKOperations? operation, string targetRef) returns string {
+        string concatanatedString = "ratelimiter";
+        if operation is APKOperations {
+            if (operation.target is string) {
+                byte[] hexBytes = string:toBytes(<string>operation.target + <string>operation.verb);
+                string operationTargetHash = crypto:hashSha1(hexBytes).toBase16();
+                concatanatedString = concatanatedString + "-" + operationTargetHash;
+            }
+            return "service-" + concatanatedString + "-" + targetRef;
+        } else {
+            return "global-" + concatanatedString + "-" + targetRef;
+        }
+    }
+
     // Generate endpoints for each environment
     private isolated function createEndpoints(EndpointConfigurations endpointConfigurations, string? endpointType) returns map<model:Endpoint>|error {
         map<model:Endpoint> createdEndpoints = {};
