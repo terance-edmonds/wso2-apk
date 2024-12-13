@@ -80,17 +80,17 @@ class GatewayModel {
     }
 
     // Generate rate limit policy name
-    public isolated function generateRateLimitPolicyRefName(APKOperations? operation, string targetRef) returns string {
-        string concatanatedString = "ratelimiter";
+    public isolated function generatePluginRefName(APKOperations? operation, string targetRef, string pluginName) returns string {
+        string concatenatedString = pluginName;
         if operation is APKOperations {
             if (operation.target is string) {
                 byte[] hexBytes = string:toBytes(<string>operation.target + <string>operation.verb);
                 string operationTargetHash = crypto:hashSha1(hexBytes).toBase16();
-                concatanatedString = concatanatedString + "-" + operationTargetHash;
+                concatenatedString = concatenatedString + "-" + operationTargetHash;
             }
-            return "service-" + concatanatedString + "-" + targetRef;
+            return "route-" + concatenatedString + "-" + targetRef;
         } else {
-            return "global-" + concatanatedString + "-" + targetRef;
+            return "service-" + concatenatedString + "-" + targetRef;
         }
     }
 
@@ -193,11 +193,11 @@ class GatewayModel {
 
     // Retrieve the HTTP match for a given operation
     private isolated function retrieveHttpRouteMatch(APKOperations operation) returns model:HTTPRouteMatch {
-        return {method: <string>operation.verb, path: {'type: "RegularExpression", value: self.retrievePathPrefix(operation.target ?: "/*")}};
+        return {method: <string>operation.verb, path: {'type: "RegularExpression", value: self.retrievePathPrefix(operation.target ?: "/*", self.apkConf.basePath)}};
     }
 
     // Retrieve the prepared path prefix
-    private isolated function retrievePathPrefix(string operation) returns string {
+    private isolated function retrievePathPrefix(string operation, string basePath) returns string {
         string[] splitValues = regex:split(operation, "/");
         string generatedPath = "";
         if (operation == "/*") {
@@ -219,7 +219,7 @@ class GatewayModel {
             int lastSlashIndex = <int>generatedPath.lastIndexOf("/", generatedPath.length());
             generatedPath = generatedPath.substring(0, lastSlashIndex) + "(.*)";
         }
-        return generatedPath.trim();
+        return basePath + generatedPath.trim();
     }
 
     private isolated function getHostNames(string uniqueId, string endpointType) returns string[] {

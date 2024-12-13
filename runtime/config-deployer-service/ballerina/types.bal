@@ -594,8 +594,15 @@ public type ConfigMapRef record {
     string key;
 };
 
-# Configuration for gateway model
+# Configuration for gateway model artifact.
 #
+# + name - The name of the gateway model artifact.
+# + version - The version of the gateway model artifact.
+# + productionHttpRoutes - The HTTP routes for the production environment.
+# + sandboxHttpRoutes - The HTTP routes for the sandbox environment.
+# + namespace - The namespace of the gateway model artifact.
+# + organization - The organization of the gateway model artifact.
+# + uniqueId - The unique ID of the gateway model artifact.
 public type GatewayModelArtifact record {
     string name;
     string 'version;
@@ -604,6 +611,16 @@ public type GatewayModelArtifact record {
     string namespace?;
     string organization;
     string uniqueId;
+};
+
+# Kong gateway artifact.
+#
+# + rateLimits - Array of Kong rate limit plugins.
+# + authenticationPlugins - Array of Kong authentication plugins.
+public type KongGatewayArtifact record {
+    *GatewayModelArtifact;
+    KongRateLimitPlugin[] rateLimits = [];
+    KongAuthenticationPlugin[] authenticationPlugins = [];
 };
 
 # Kong plugin configuration.
@@ -628,7 +645,7 @@ public type KongPlugin record {|
 # + month - The rate limit per month.
 # + year - The rate limit per year.
 # + policy - The policy for rate limiting. Default is "local".
-public type KongRateLimitPluginConfig record {
+public type KongRateLimitPluginConfig record {|
     int second?;
     int minute?;
     int hour?;
@@ -636,23 +653,139 @@ public type KongRateLimitPluginConfig record {
     int month?;
     int year?;
     string policy = "local";
-};
+|};
 
 # Kong rate limit plugin.
 #
+# + plugin - The name of the plugin, which is "rate-limiting".
 # + config - The configuration for the Kong rate limit plugin.
-public type KongRateLimitPlugin record {
+public type KongRateLimitPlugin record {|
     *KongPlugin;
     string plugin = "rate-limiting";
     KongRateLimitPluginConfig config;
-};
+|};
 
-# Kong gateway artifact.
+# Configuration for Kong key authentication plugin.
 #
-# + rateLimits - Array of Kong rate limit plugins
-# # Kong gateway artifact.
+# + key_names - Array of parameter names where the plugin will look for a key.
+# + hide_credentials - If true, the plugin strips the credential from the request.
+# + key_in_header - If enabled, the plugin reads the request header for the key.
+# + key_in_query - If enabled, the plugin reads the query parameter for the key.
+# + key_in_body - If enabled, the plugin reads the request body for the key.
+# + run_on_preflight - Indicates whether the plugin should run on OPTIONS preflight requests.
+# + realm - When authentication fails, the plugin sends WWW-Authenticate header with realm attribute value.
+# + anonymous - An optional string value to use as an “anonymous” consumer if authentication fails.
+public type KongKeyAuthPluginConfig record {|
+    string[] key_names;
+    boolean hide_credentials = false;
+    boolean key_in_header = true;
+    boolean key_in_query = true;
+    boolean key_in_body = true;
+    boolean run_on_preflight = true;
+    string realm?;
+    string anonymous?;
+|};
+
+# Kong key authentication plugin.
 #
-public type KongGatewayArtifact record {
-    *GatewayModelArtifact;
-    KongRateLimitPlugin[] rateLimits = [];
-};
+# + plugin - The name of the plugin, which is "key-auth".
+# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
+# + config - The configuration for the Kong key authentication plugin.
+public type KongKeyAuthPlugin record {|
+    *KongPlugin;
+    string plugin = "key-auth";
+    boolean enabled = true;
+    KongKeyAuthPluginConfig config;
+|};
+
+# Configuration for Kong jwt authentication plugin.
+#
+# + key_claim_name - The name of the claim in which the key identifying the secret must be passed.
+# + run_on_preflight - Indicates whether the plugin should run on OPTIONS preflight requests.
+# + secret_is_base64 - If true, the plugin assumes the credential’s secret to be base64 encoded.
+# + maximum_expiration - Limits the lifetime of the JWT to maximum_expiration seconds.
+# + header_names - A list of HTTP header names that Kong will inspect to retrieve JWTs.
+# + uri_param_names - A list of querystring parameters that Kong will inspect to retrieve JWTs.
+# + cookie_names - A list of cookie names that Kong will inspect to retrieve JWTs.
+# + claims_to_verify - A list of registered claims that Kong can verify. Accepted values: exp or nbf.
+# + realm - When authentication fails, the plugin sends WWW-Authenticate header with realm attribute value.
+# + anonymous - An optional string value to use as an “anonymous” consumer if authentication fails.
+public type KongJWTAuthPluginConfig record {|
+    string key_claim_name = "iss";
+    boolean run_on_preflight = true;
+    boolean secret_is_base64 = false;
+    int maximum_expiration = 0;
+    string[] header_names = ["Authorization"];
+    string[] uri_param_names = ["jwt"];
+    string[] cookie_names?;
+    string claims_to_verify?;
+    string realm?;
+    string anonymous?;
+|};
+
+# Kong jwt authentication plugin.
+#
+# + plugin - The name of the plugin, which is "jwt".
+# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
+# + config - The configuration for the Kong jwt authentication plugin.
+public type KongJWTAuthPlugin record {|
+    *KongPlugin;
+    string plugin = "jwt";
+    boolean enabled = true;
+    KongJWTAuthPluginConfig config;
+|};
+
+# Configuration for Kong oauth2 authentication plugin.
+#
+# + provision_key - The unique key the plugin has generated when it has been added to the Service.
+# + token_expiration - An optional integer value telling the plugin how many seconds a token should last, after which the client will need to refresh the token. Set to 0 to disable the expiration.
+# + mandatory_scope - An optional boolean value telling the plugin to require at least one scope to be authorized by the end user.
+# + enable_authorization_code - An optional boolean value to enable the three-legged Authorization Code flow (RFC 6742 Section 4.1).
+# + enable_implicit_grant - An optional boolean value to enable the Implicit Grant flow which allows to provision a token as a result of the authorization process (RFC 6742 Section 4.2).
+# + enable_client_credentials - An optional boolean value to enable the Client Credentials Grant flow (RFC 6742 Section 4.4).
+# + enable_password_grant - An optional boolean value to enable the Resource Owner Password Credentials Grant flow (RFC 6742 Section 4.3).
+# + hide_credentials - An optional boolean value telling the plugin to show or hide the credential from the upstream service.
+# + accept_http_if_already_terminated - Accepts HTTPs requests that have already been terminated by a proxy or load balancer.
+# + global_credentials - An optional boolean value that allows using the same OAuth credentials generated by the plugin with any other service whose OAuth 2.0 plugin configuration also has config.global_credentials=true.
+# + auth_header_name - The name of the header that is supposed to carry the access token.
+# + refresh_token_ttl - Time-to-live value for data.
+# + reuse_refresh_token - An optional boolean value that indicates whether an OAuth refresh token is reused when refreshing an access token.
+# + persistent_refresh_token - An optional boolean value that indicates whether the refresh token should be persistent.
+# + pkce - Specifies a mode of how the Proof Key for Code Exchange (PKCE) should be handled by the plugin. Must be one of: none, lax, strict.
+# + scopes - Describes an array of scope names that will be available to the end user. If mandatory_scope is set to true, then scopes are required.
+# + realm - When authentication fails the plugin sends WWW-Authenticate header with realm attribute value.
+# + anonymous - An optional string (consumer UUID or username) value to use as an “anonymous” consumer if authentication fails.
+public type KongOAuth2AuthPluginConfig record {|
+    string provision_key;
+    int token_expiration = 7200;
+    boolean mandatory_scope = false;
+    boolean enable_authorization_code = false;
+    boolean enable_implicit_grant = false;
+    boolean enable_client_credentials = false;
+    boolean enable_password_grant = false;
+    boolean hide_credentials = false;
+    boolean accept_http_if_already_terminated = false;
+    boolean global_credentials = false;
+    string auth_header_name = "Authorization";
+    int refresh_token_ttl = 1209600;
+    boolean reuse_refresh_token = false;
+    boolean persistent_refresh_token = false;
+    string pkce = "lax";
+    string[] scopes?;
+    string realm?;
+    string anonymous?;
+|};
+
+# Kong jwt authentication plugin.
+#
+# + plugin - The name of the plugin, which is "jwt".
+# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
+# + config - The configuration for the Kong jwt authentication plugin.
+public type KongOAuth2AuthPlugin record {|
+    *KongPlugin;
+    string plugin = "oauth2";
+    boolean enabled = true;
+    KongOAuth2AuthPluginConfig config;
+|};
+
+public type KongAuthenticationPlugin KongKeyAuthPlugin|KongJWTAuthPlugin|KongOAuth2AuthPlugin;
