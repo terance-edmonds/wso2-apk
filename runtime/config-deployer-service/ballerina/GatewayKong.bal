@@ -30,12 +30,19 @@ public class GatewayKong {
             GatewayModelArtifact gatewayModelArtifact = check self.gatewayModel.prepareArtifact();
             // Generate kong gateway specific artifact
             KongGatewayArtifact kongGatewayArtifact = self.generateKongGatewayArtifact(gatewayModelArtifact);
-            // Create service rate limit config
-            KongRateLimitPlugin? kongRateLimitPlugin = self.generateKongRateLimitPlugin(kongGatewayArtifact, self.apkConf.rateLimit, gatewayModelArtifact.uniqueId, ());
-            if kongRateLimitPlugin is KongRateLimitPlugin {
+            // Create rate limit config if exists
+            RateLimit? rateLimit = self.apkConf.rateLimit;
+            if rateLimit is RateLimit {
+                KongRateLimitPlugin kongRateLimitPlugin = self.generateKongRateLimitPlugin(kongGatewayArtifact, rateLimit, gatewayModelArtifact.uniqueId, ());
                 plugins.push(kongRateLimitPlugin.metadata.name);
             }
-            // Create service authentication config
+            // Create cors config if exists
+            CORSConfiguration? corsConfiguration = self.apkConf.corsConfiguration;
+            if corsConfiguration is CORSConfiguration {
+                KongCorsPlugin kongCorsPlugin = self.generateKongCorsPlugin(kongGatewayArtifact, corsConfiguration, gatewayModelArtifact.uniqueId);
+                plugins.push(kongCorsPlugin.metadata.name);
+            }
+            // Create authentication config
             KongAuthenticationPlugin[] kongAuthenticationPlugins = check self.generateKongAuthenticationPlugin(kongGatewayArtifact, self.apkConf.authentication, gatewayModelArtifact.uniqueId, ());
             foreach KongAuthenticationPlugin kongAuthenticationPlugin in kongAuthenticationPlugins {
                 plugins.push(kongAuthenticationPlugin.metadata.name);
@@ -83,6 +90,12 @@ public class GatewayKong {
                     KongOAuth2AuthPlugin kongOAuth2AuthPlugin = self.generateOAuth2AuthPlugin(kongGatewayArtifact, apiOAuth2Authentication, targetRef, ());
                     kongAuthenticationPlugins.push(kongOAuth2AuthPlugin);
                 }
+                // Generate mTLS auth plugin
+                if authenticationRequest.authType == "mTLS" {
+                    MTLSAuthentication apiMTLSAuthentication = check authenticationRequest.cloneWithType(MTLSAuthentication);
+                    KongMTLSAuthPlugin kongMTLSAuthPlugin = self.generateMTLSAuthPlugin(kongGatewayArtifact, apiMTLSAuthentication, targetRef, ());
+                    kongAuthenticationPlugins.push(kongMTLSAuthPlugin);
+                }
             }
         }
         return kongAuthenticationPlugins;
@@ -106,7 +119,7 @@ public class GatewayKong {
             kongKeyAuthPlugin.config.key_names.push(authenticationRequest.queryParamName);
         }
         // Add kong key auth plugin to artifact
-        kongGatewayArtifact.authenticationPlugins.push(kongKeyAuthPlugin);
+        kongGatewayArtifact.authentications.push(kongKeyAuthPlugin);
         return kongKeyAuthPlugin;
     }
 
@@ -121,7 +134,7 @@ public class GatewayKong {
             }
         };
         // Add kong jwt auth plugin to artifact
-        kongGatewayArtifact.authenticationPlugins.push(kongJWTAuthPlugin);
+        kongGatewayArtifact.authentications.push(kongJWTAuthPlugin);
         return kongJWTAuthPlugin;
     }
 
@@ -139,8 +152,44 @@ public class GatewayKong {
             }
         };
         // Add kong oauth2 auth plugin to artifact
-        kongGatewayArtifact.authenticationPlugins.push(kongOAuth2AuthPlugin);
+        kongGatewayArtifact.authentications.push(kongOAuth2AuthPlugin);
         return kongOAuth2AuthPlugin;
+    }
+
+    private isolated function generateMTLSAuthPlugin(KongGatewayArtifact kongGatewayArtifact, MTLSAuthentication authenticationRequest, string targetRefName, APKOperations? operation) returns KongMTLSAuthPlugin {
+        KongMTLSAuthPlugin kongMTLSAuthPlugin = {
+            metadata: {
+                name: self.gatewayModel.generatePluginRefName(operation, targetRefName, "mtls_auth")
+            },
+            enabled: authenticationRequest.enabled,
+            config: {
+                ca_certificates: authenticationRequest.certificates.map(isolated function(ConfigMapRef cmr) returns string {
+                    return cmr.key;
+                })
+            }
+        };
+        // Add kong mTLS auth plugin to artifact
+        kongGatewayArtifact.authentications.push(kongMTLSAuthPlugin);
+        return kongMTLSAuthPlugin;
+    }
+
+    private isolated function generateKongCorsPlugin(KongGatewayArtifact kongGatewayArtifact, CORSConfiguration corsConfiguration, string targetRefName) returns KongCorsPlugin {
+        KongCorsPlugin kongCorsPlugin = {
+            metadata: {
+                name: self.gatewayModel.generatePluginRefName((), targetRefName, "cors")
+            },
+            enabled: corsConfiguration.corsConfigurationEnabled,
+            config: {
+                origins: corsConfiguration.accessControlAllowOrigins ?: [],
+                headers: corsConfiguration.accessControlAllowHeaders,
+                methods: corsConfiguration.accessControlAllowMethods ?: HTTP_DEFAULT_METHODS,
+                max_age: corsConfiguration.accessControlAllowMaxAge ?: 0,
+                credentials: corsConfiguration.accessControlAllowCredentials ?: false,
+                exposed_headers: corsConfiguration.accessControlExposeHeaders
+            }
+        };
+        kongGatewayArtifact.cors = kongCorsPlugin;
+        return kongCorsPlugin;
     }
 
     private isolated function generateProvisionKey(string pluginName) returns string {
@@ -148,23 +197,20 @@ public class GatewayKong {
         return crypto:hashSha1(hexBytes).toBase16();
     }
 
-    private isolated function generateKongRateLimitPlugin(KongGatewayArtifact kongGatewayArtifact, RateLimit? rateLimit, string targetRefName, APKOperations? operation) returns KongRateLimitPlugin|() {
-        if rateLimit is RateLimit {
-            string rateLimitUnit = rateLimit.unit.toLowerAscii();
-            KongRateLimitPlugin kongRateLimitPlugin = {
-                metadata: {
-                    name: self.gatewayModel.generatePluginRefName(operation, targetRefName, "rate_limiting")
-                },
-                config: {
-                    [rateLimitUnit]: rateLimit.requestsPerUnit
-                }
-            };
-            // Add kong rate limit plugin to artifact
-            kongGatewayArtifact.rateLimits.push(kongRateLimitPlugin);
-            return kongRateLimitPlugin;
-        } else {
-            return ();
-        }
+    private isolated function generateKongRateLimitPlugin(KongGatewayArtifact kongGatewayArtifact, RateLimit rateLimit, string targetRefName, APKOperations? operation) returns KongRateLimitPlugin {
+        string rateLimitUnit = rateLimit.unit.toLowerAscii();
+        KongRateLimitPlugin kongRateLimitPlugin = {
+            metadata: {
+                name: self.gatewayModel.generatePluginRefName(operation, targetRefName, "rate_limiting")
+            },
+            config: {
+                [rateLimitUnit]: rateLimit.requestsPerUnit
+            }
+        };
+        // Add kong rate limit plugin to artifact
+        kongGatewayArtifact.rateLimits.push(kongRateLimitPlugin);
+        return kongRateLimitPlugin;
+
     }
 
     private isolated function setHttpRoutePluginAnnotations(model:HTTPRoute[] httpRoutes, string[] plugins) returns model:HTTPRoute[] {

@@ -616,11 +616,12 @@ public type GatewayModelArtifact record {
 # Kong gateway artifact.
 #
 # + rateLimits - Array of Kong rate limit plugins.
-# + authenticationPlugins - Array of Kong authentication plugins.
+# + authentications - Array of Kong authentication plugins.
 public type KongGatewayArtifact record {
     *GatewayModelArtifact;
     KongRateLimitPlugin[] rateLimits = [];
-    KongAuthenticationPlugin[] authenticationPlugins = [];
+    KongAuthenticationPlugin[] authentications = [];
+    KongCorsPlugin cors?;
 };
 
 # Kong plugin configuration.
@@ -629,11 +630,13 @@ public type KongGatewayArtifact record {
 # + kind - The kind of the Kong plugin. Default is "KongPlugin".
 # + metadata - Metadata about the Kong plugin.
 # + plugin - The type of the Kong plugin.
+# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
 public type KongPlugin record {|
     string apiVersion = "configuration.konghq.com/v1";
     string kind = "KongPlugin";
     model:Metadata metadata;
     string plugin;
+    boolean enabled = true;
 |};
 
 # Configuration for Kong rate limit plugin.
@@ -689,12 +692,10 @@ public type KongKeyAuthPluginConfig record {|
 # Kong key authentication plugin.
 #
 # + plugin - The name of the plugin, which is "key-auth".
-# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
 # + config - The configuration for the Kong key authentication plugin.
 public type KongKeyAuthPlugin record {|
     *KongPlugin;
     string plugin = "key-auth";
-    boolean enabled = true;
     KongKeyAuthPluginConfig config;
 |};
 
@@ -726,12 +727,10 @@ public type KongJWTAuthPluginConfig record {|
 # Kong jwt authentication plugin.
 #
 # + plugin - The name of the plugin, which is "jwt".
-# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
 # + config - The configuration for the Kong jwt authentication plugin.
 public type KongJWTAuthPlugin record {|
     *KongPlugin;
     string plugin = "jwt";
-    boolean enabled = true;
     KongJWTAuthPluginConfig config;
 |};
 
@@ -779,13 +778,91 @@ public type KongOAuth2AuthPluginConfig record {|
 # Kong jwt authentication plugin.
 #
 # + plugin - The name of the plugin, which is "jwt".
-# + enabled - Indicates whether the plugin is enabled. Defaults to `true`.
 # + config - The configuration for the Kong jwt authentication plugin.
 public type KongOAuth2AuthPlugin record {|
     *KongPlugin;
     string plugin = "oauth2";
-    boolean enabled = true;
     KongOAuth2AuthPluginConfig config;
 |};
 
-public type KongAuthenticationPlugin KongKeyAuthPlugin|KongJWTAuthPlugin|KongOAuth2AuthPlugin;
+# Configuration for Kong mTLS authentication plugin.
+#
+# + ca_certificates - List of CA Certificates strings to use as Certificate Authorities (CA) when validating a client certificate.
+# + consumer_by - Whether to match the subject name of the client-supplied certificate against consumer’s username and/or custom_id attribute.
+# + cache_ttl - Cache expiry time in seconds.
+# + skip_consumer_lookup - Skip consumer lookup once certificate is trusted against the configured CA list.
+# + allow_partial_chain - Allow certificate verification with only an intermediate certificate.
+# + authenticated_group_by - Certificate property to use as the authenticated group (Must be one of: CN, DN).
+# + revocation_check_mode - Controls client certificate revocation check behavior (Must be one of: SKIP, IGNORE_CA_ERROR, STRICT).
+# + http_timeout - HTTP timeout threshold in milliseconds when communicating with the OCSP server or downloading CRL.
+# + cert_cache_ttl - The length of time in seconds between refreshes of the revocation check status cache.
+# + send_ca_dn - Sends the distinguished names (DN) of the configured CA list in the TLS handshake message.
+# + default_consumer - The UUID or username of the consumer to use when a trusted client certificate is presented but no consumer matches.
+# + http_proxy_host - A string representing a host name, such as example.com.
+# + http_proxy_port - An integer representing a port number between 0 and 65535, inclusive.
+# + https_proxy_host - A string representing a host name, such as example.com.
+# + https_proxy_port - An integer representing a port number between 0 and 65535, inclusive.
+# + anonymous - An optional string (consumer UUID or username) value to use as an “anonymous” consumer if authentication fails.
+public type KongMTLSAuthPluginConfig record {|
+    string[] ca_certificates?;
+    string consumer_by = "username, custom_id";
+    int cache_ttl = 60;
+    boolean skip_consumer_lookup = false;
+    boolean allow_partial_chain = false;
+    string authenticated_group_by = "CN";
+    string revocation_check_mode = "IGNORE_CA_ERROR";
+    int http_timeout = 30000;
+    int cert_cache_ttl = 60000;
+    boolean send_ca_dn = false;
+    string default_consumer?;
+    string http_proxy_host?;
+    int http_proxy_port?;
+    string https_proxy_host?;
+    int https_proxy_port?;
+    string anonymous?;
+|};
+
+# Kong mTLS authentication plugin.
+#
+# + plugin - The name of the plugin, which is "mtls-auth".
+# + config - The configuration for the Kong mTLS authentication plugin.
+public type KongMTLSAuthPlugin record {|
+    *KongPlugin;
+    string plugin = "mtls-auth";
+    KongMTLSAuthPluginConfig config;
+|};
+
+# All possible kong authentication types that supports APK
+public type KongAuthenticationPlugin KongKeyAuthPlugin|KongJWTAuthPlugin|KongOAuth2AuthPlugin|KongMTLSAuthPlugin;
+
+# Configuration for Kong CORS plugin.
+#
+# + origins - List of allowed domains for the Access-Control-Allow-Origin header. Use `*` to allow all origins. Values can be flat strings or PCRE regexes.
+# + methods - Value for the Access-Control-Allow-Methods header. Available options include GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS, TRACE, CONNECT. Default is all options.
+# + max_age - Indicates how long the results of the preflight request can be cached, in seconds.
+# + credentials - Flag to determine whether the Access-Control-Allow-Credentials header should be sent with true as the value. Default is false.
+# + private_network - Flag to determine whether the Access-Control-Allow-Private-Network header should be sent with true as the value. Default is false.
+# + preflight_continue - A boolean value that instructs the plugin to proxy the OPTIONS preflight request to the Upstream service. Default is false.
+# + headers - Value for the Access-Control-Allow-Headers header.
+# + exposed_headers - Value for the Access-Control-Expose-Headers header. If not specified, no custom headers are exposed.
+public type KongCorsPluginConfig record {|
+    string[] origins?;
+    string[] methods = HTTP_DEFAULT_METHODS;
+    int max_age?;
+    boolean credentials = false;
+    boolean private_network = false;
+    boolean preflight_continue = false;
+    string[] headers?;
+    string[] exposed_headers?;
+
+|};
+
+# Kong CORS plugin.
+#
+# + plugin - The name of the plugin, which is "cors".
+# + config - The configuration for the Kong cors plugin.
+public type KongCorsPlugin record {|
+    *KongPlugin;
+    string plugin = "cors";
+    KongCorsPluginConfig config;
+|};
