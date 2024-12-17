@@ -6,7 +6,6 @@ import config_deployer_service.org.wso2.apk.config.model as runtimeModels;
 
 import ballerina/file;
 import ballerina/http;
-import ballerina/io;
 import ballerina/jballerina.java;
 import ballerina/log;
 import ballerina/mime;
@@ -173,9 +172,13 @@ public class ConfigGeneratorClient {
                 "kong" => {
                     [APKConf, string?] [apkConf, apiDefinition] = check apiclient.prepareConfigurations(body.apkConfiguration, body.definitionFile);
                     GatewayKong gatewayKong = new (apkConf, apiDefinition, organization);
-                    string res = check gatewayKong.generateK8sArtifacts();
+                    KongGatewayArtifact kongArtifact = check gatewayKong.generateK8sArtifacts();
+                    // [string, string] zipName = check gatewayKong.zipAPIArtifact(kongArtifact.uniqueId, kongArtifact);
                     http:Response response = new;
-                    response.setTextPayload(res);
+                    // response.setFileAsPayload(zipName[1]);
+                    // response.addHeader("Content-Disposition", "attachment; filename=" + zipName[0]);
+                    response.addHeader("Content-Type", "application/json");
+                    response.setTextPayload(kongArtifact.toJsonString());
                     return response;
                 }
                 "apk"|_ => {
@@ -199,96 +202,75 @@ public class ConfigGeneratorClient {
         string zipDir = check file:createTempDir(uuid:createType1AsString());
         model:API? k8sAPI = apiArtifact.api;
         if k8sAPI is model:API {
-            string yamlString = check self.convertJsonToYaml(k8sAPI.toJsonString());
-            _ = check self.storeFile(yamlString, k8sAPI.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(k8sAPI.toJsonString());
+            _ = check storeFile(yamlString, k8sAPI.metadata.name, zipDir);
         }
         model:ConfigMap? definition = apiArtifact.definition;
         if definition is model:ConfigMap {
-            string yamlString = check self.convertJsonToYaml(definition.toJsonString());
-            _ = check self.storeFile(yamlString, definition.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(definition.toJsonString());
+            _ = check storeFile(yamlString, definition.metadata.name, zipDir);
         }
         foreach model:Authentication authenticationCr in apiArtifact.authenticationMap {
-            string yamlString = check self.convertJsonToYaml(authenticationCr.toJsonString());
-            _ = check self.storeFile(yamlString, authenticationCr.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(authenticationCr.toJsonString());
+            _ = check storeFile(yamlString, authenticationCr.metadata.name, zipDir);
         }
         foreach model:HTTPRoute httpRoute in apiArtifact.productionHttpRoutes {
-            string yamlString = check self.convertJsonToYaml(httpRoute.toJsonString());
-            _ = check self.storeFile(yamlString, httpRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(httpRoute.toJsonString());
+            _ = check storeFile(yamlString, httpRoute.metadata.name, zipDir);
         }
         foreach model:HTTPRoute httpRoute in apiArtifact.sandboxHttpRoutes {
-            string yamlString = check self.convertJsonToYaml(httpRoute.toJsonString());
-            _ = check self.storeFile(yamlString, httpRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(httpRoute.toJsonString());
+            _ = check storeFile(yamlString, httpRoute.metadata.name, zipDir);
         }
         foreach model:GQLRoute gqlRoute in apiArtifact.productionGqlRoutes {
-            string yamlString = check self.convertJsonToYaml(gqlRoute.toJsonString());
-            _ = check self.storeFile(yamlString, gqlRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(gqlRoute.toJsonString());
+            _ = check storeFile(yamlString, gqlRoute.metadata.name, zipDir);
         }
         foreach model:GQLRoute gqlRoute in apiArtifact.sandboxGqlRoutes {
-            string yamlString = check self.convertJsonToYaml(gqlRoute.toJsonString());
-            _ = check self.storeFile(yamlString, gqlRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(gqlRoute.toJsonString());
+            _ = check storeFile(yamlString, gqlRoute.metadata.name, zipDir);
         }
         foreach model:GRPCRoute grpcRoute in apiArtifact.productionGrpcRoutes {
-            string yamlString = check self.convertJsonToYaml(grpcRoute.toJsonString());
-            _ = check self.storeFile(yamlString, grpcRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(grpcRoute.toJsonString());
+            _ = check storeFile(yamlString, grpcRoute.metadata.name, zipDir);
         }
         foreach model:GRPCRoute grpcRoute in apiArtifact.sandboxGrpcRoutes {
-            string yamlString = check self.convertJsonToYaml(grpcRoute.toJsonString());
-            _ = check self.storeFile(yamlString, grpcRoute.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(grpcRoute.toJsonString());
+            _ = check storeFile(yamlString, grpcRoute.metadata.name, zipDir);
         }
         foreach model:Backend backend in apiArtifact.backendServices {
-            string yamlString = check self.convertJsonToYaml(backend.toJsonString());
-            _ = check self.storeFile(yamlString, backend.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(backend.toJsonString());
+            _ = check storeFile(yamlString, backend.metadata.name, zipDir);
         }
         foreach model:Scope scope in apiArtifact.scopes {
-            string yamlString = check self.convertJsonToYaml(scope.toJsonString());
-            _ = check self.storeFile(yamlString, scope.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(scope.toJsonString());
+            _ = check storeFile(yamlString, scope.metadata.name, zipDir);
         }
         foreach model:RateLimitPolicy rateLimitPolicy in apiArtifact.rateLimitPolicies {
-            string yamlString = check self.convertJsonToYaml(rateLimitPolicy.toJsonString());
-            _ = check self.storeFile(yamlString, rateLimitPolicy.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(rateLimitPolicy.toJsonString());
+            _ = check storeFile(yamlString, rateLimitPolicy.metadata.name, zipDir);
         }
         foreach model:AIRateLimitPolicy airateLimitPolicy in apiArtifact.aiRatelimitPolicies {
-            string yamlString = check self.convertJsonToYaml(airateLimitPolicy.toJsonString());
-            _ = check self.storeFile(yamlString, airateLimitPolicy.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(airateLimitPolicy.toJsonString());
+            _ = check storeFile(yamlString, airateLimitPolicy.metadata.name, zipDir);
         }
         foreach model:APIPolicy apiPolicy in apiArtifact.apiPolicies {
-            string yamlString = check self.convertJsonToYaml(apiPolicy.toJsonString());
-            _ = check self.storeFile(yamlString, apiPolicy.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(apiPolicy.toJsonString());
+            _ = check storeFile(yamlString, apiPolicy.metadata.name, zipDir);
         }
         foreach model:InterceptorService interceptorService in apiArtifact.interceptorServices {
-            string yamlString = check self.convertJsonToYaml(interceptorService.toJsonString());
-            _ = check self.storeFile(yamlString, interceptorService.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(interceptorService.toJsonString());
+            _ = check storeFile(yamlString, interceptorService.metadata.name, zipDir);
         }
         model:BackendJWT? backendJwt = apiArtifact.backendJwt;
         if backendJwt is model:BackendJWT {
-            string yamlString = check self.convertJsonToYaml(apiArtifact.backendJwt.toJsonString());
-            _ = check self.storeFile(yamlString, backendJwt.metadata.name, zipDir);
+            string yamlString = check convertJsonToYaml(apiArtifact.backendJwt.toJsonString());
+            _ = check storeFile(yamlString, backendJwt.metadata.name, zipDir);
         }
         string zipfileName = string:concat(apiArtifact.name, "-", apiArtifact.'version);
-        [string, string] zipName = check self.zipDirectory(zipfileName, zipDir);
+        [string, string] zipName = check zipDirectory(zipfileName, zipDir);
         return zipName;
     }
 
-    private isolated function convertJsonToYaml(string jsonString) returns string|error {
-        commons:YamlUtil yamlUtil = commons:newYamlUtil1();
-        string|() convertedYaml = check yamlUtil.fromJsonStringToYaml(jsonString);
-        if convertedYaml is string {
-            return convertedYaml;
-        }
-        return e909022("Error while converting json to yaml", convertedYaml);
-    }
-
-    private isolated function storeFile(string jsonString, string fileName, string? directroy = ()) returns error? {
-        string fullPath = directroy ?: "";
-        fullPath = fullPath + file:pathSeparator + fileName + ".yaml";
-        _ = check io:fileWriteString(fullPath, jsonString);
-    }
-
-    private isolated function zipDirectory(string zipfileName, string directoryPath) returns [string, string]|error {
-        string zipName = zipfileName + ZIP_FILE_EXTENSTION;
-        string zipPath = directoryPath + ZIP_FILE_EXTENSTION;
-        _ = check commons:ZIPUtils_zipDir(directoryPath, zipPath);
-        return [zipName, zipPath];
-    }
-
 }
+

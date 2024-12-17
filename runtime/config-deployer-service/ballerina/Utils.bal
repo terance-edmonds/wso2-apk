@@ -1,3 +1,8 @@
+import ballerina/file;
+import ballerina/io;
+
+import wso2/apk_common_lib as commons;
+
 isolated function getDomain(string url) returns string {
     string hostPort = "";
     string protocol = "";
@@ -118,4 +123,26 @@ isolated function getProtocol(string|K8sService endpoint) returns string {
     } else {
         return endpoint.protocol ?: "http";
     }
+}
+
+isolated function convertJsonToYaml(string jsonString) returns string|error {
+    commons:YamlUtil yamlUtil = commons:newYamlUtil1();
+    string|() convertedYaml = check yamlUtil.fromJsonStringToYaml(jsonString);
+    if convertedYaml is string {
+        return convertedYaml;
+    }
+    return e909022("Error while converting json to yaml", convertedYaml);
+}
+
+isolated function storeFile(string jsonString, string fileName, string? directroy = ()) returns error? {
+    string fullPath = directroy ?: "";
+    fullPath = fullPath + file:pathSeparator + fileName + ".yaml";
+    _ = check io:fileWriteString(fullPath, jsonString);
+}
+
+isolated function zipDirectory(string zipfileName, string directoryPath) returns [string, string]|error {
+    string zipName = zipfileName + ZIP_FILE_EXTENSTION;
+    string zipPath = directoryPath + ZIP_FILE_EXTENSTION;
+    _ = check commons:ZIPUtils_zipDir(directoryPath, zipPath);
+    return [zipName, zipPath];
 }

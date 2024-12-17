@@ -12,33 +12,33 @@ class GatewayModel {
     private string? apiDefinition;
     private commons:Organization organization;
     private GatewayConfigurations gatewayConfigurations;
-    private string uniqueId = "";
+    private GatewayModelArtifact gatewayModelArtifact = {
+        uniqueId: "",
+        name: "",
+        version: "",
+        organization: ""
+    };
 
     public isolated function init(APKConf conf, string? apiDefinition, commons:Organization organization, GatewayConfigurations gatewayConfigurations) {
         self.apkConf = conf;
         self.apiDefinition = apiDefinition;
         self.organization = organization;
         self.gatewayConfigurations = gatewayConfigurations;
-        self.uniqueId = self.getUniqueId(conf.name, conf.version, organization);
+        self.gatewayModelArtifact = {uniqueId: self.getUniqueId(self.apkConf.name, self.apkConf.version, self.organization), name: self.apkConf.name, version: self.apkConf.version, organization: self.organization.name};
     }
 
     // Prepare K8s artifacts
     public isolated function prepareArtifact() returns GatewayModelArtifact|commons:APKError {
         do {
-            // Initiate gateway model artifacts object
-            GatewayModelArtifact gatewayModelArtifact = {uniqueId: self.uniqueId, name: self.apkConf.name, version: self.apkConf.version, organization: self.organization.name};
             map<model:Endpoint|()> createdEndpoints = {};
             EndpointConfigurations? endpointConfigurations = self.apkConf.endpointConfigurations;
             if (endpointConfigurations is EndpointConfigurations) {
                 createdEndpoints = check self.createEndpoints(endpointConfigurations, ());
             }
-            // create HTTP Route CRs
-            model:HTTPRoute[] sandboxHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(SANDBOX_TYPE) ? createdEndpoints.get(SANDBOX_TYPE) : (), SANDBOX_TYPE);
-            gatewayModelArtifact.sandboxHttpRoutes = sandboxHttpRoutes;
-            model:HTTPRoute[] productionHttpRoutes = check self.generateRoutes(createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), PRODUCTION_TYPE);
-            gatewayModelArtifact.productionHttpRoutes = productionHttpRoutes;
-
-            return gatewayModelArtifact;
+            // create Route CRs
+            check self.generateRoutes(createdEndpoints.hasKey(SANDBOX_TYPE) ? createdEndpoints.get(SANDBOX_TYPE) : (), SANDBOX_TYPE);
+            check self.generateRoutes(createdEndpoints.hasKey(PRODUCTION_TYPE) ? createdEndpoints.get(PRODUCTION_TYPE) : (), PRODUCTION_TYPE);
+            return self.gatewayModelArtifact;
         } on fail var e {
             log:printError("Internal Error occurred", e);
             return e909022("Internal Error occurred", e);
@@ -53,9 +53,8 @@ class GatewayModel {
     }
 
     // Generate the routes
-    public isolated function generateRoutes(model:Endpoint? endpoint, string endpointType) returns model:HTTPRoute[]|commons:APKError {
-        // Partition the http routes (max 8 rules per route)
-        model:HTTPRoute[] httpRoutes = [];
+    public isolated function generateRoutes(model:Endpoint? endpoint, string endpointType) returns commons:APKError|error? {
+        // Partition the routes (max 8 rules per route)
         APKOperations[] apiOperations = self.apkConf.operations ?: [];
         APKOperations[][] operationsArray = [];
         int row = 0;
@@ -70,13 +69,56 @@ class GatewayModel {
         }
         int count = 1;
         foreach APKOperations[] item in operationsArray {
-            // Put each 8 set of operations into one http route
+            // Put each 8 set of operations into one route
             APKOperations[] operations = item.clone();
-            model:HTTPRoute httpRoute = check self.putRoutesForPartition(operations, endpoint, endpointType, count);
-            httpRoutes.push(httpRoute);
+            check self.putRoutesForPartition(operations, endpoint, endpointType, count);
             count = count + 1;
         }
-        return httpRoutes;
+    }
+
+    // Put a set of operations into route
+    private isolated function putRoutesForPartition(APKOperations[] operations, model:Endpoint? endpoint, string endpointType, int count) returns commons:APKError|error? {
+        if self.apkConf.'type == API_TYPE_REST {
+            model:HTTPRoute httpRoute = {
+                metadata: {
+                    name: self.gatewayModelArtifact.uniqueId + "-" + endpointType + "-httproute-" + count.toString(),
+                    labels: self.generateApiLabel()
+                },
+                spec: {
+                    parentRefs: self.generateParentRefs(self.gatewayConfigurations),
+                    rules: check self.generateHTTPRouteRules(operations, endpoint, endpointType),
+                    hostnames: self.getHostNames(self.gatewayModelArtifact.uniqueId, endpointType)
+                }
+            };
+            if httpRoute.spec.rules.length() > 0 {
+                if endpointType === PRODUCTION_TYPE {
+                    self.gatewayModelArtifact.productionHttpRoutes.push(httpRoute);
+                } else {
+                    self.gatewayModelArtifact.sandboxHttpRoutes.push(httpRoute);
+                }
+            }
+        } else if self.apkConf.'type == API_TYPE_GRPC {
+            model:GRPCRoute grpcRoute = {
+                metadata: {
+                    name: self.gatewayModelArtifact.uniqueId + "-" + endpointType + "-grpcroute-" + count.toString(),
+                    labels: self.generateApiLabel()
+                },
+                spec: {
+                    parentRefs: self.generateParentRefs(self.gatewayConfigurations),
+                    rules: check self.generateGRPCRouteRules(operations, endpoint, endpointType),
+                    hostnames: self.getHostNames(self.gatewayModelArtifact.uniqueId, endpointType)
+                }
+            };
+            if grpcRoute.spec.rules.length() > 0 {
+                if endpointType === PRODUCTION_TYPE {
+                    self.gatewayModelArtifact.productionGrpcRoutes.push(grpcRoute);
+                } else {
+                    self.gatewayModelArtifact.sandboxGrpcRoutes.push(grpcRoute);
+                }
+            }
+        } else {
+            return e909018("Invalid API Type specified");
+        }
     }
 
     // Generate rate limit policy name
@@ -118,19 +160,20 @@ class GatewayModel {
         return createdEndpoints;
     }
 
-    // Put a set of operations into a http route
-    private isolated function putRoutesForPartition(APKOperations[] operations, model:Endpoint? endpoint, string endpointType, int count) returns model:HTTPRoute|commons:APKError {
-        model:HTTPRoute httpRoute = {
-            metadata: {
-                name: self.uniqueId + "-" + endpointType + "-httproute-" + count.toString()
-            },
-            spec: {
-                parentRefs: self.generateParentRefs(self.gatewayConfigurations),
-                rules: check self.generateHTTPRouteRules(operations, endpoint, endpointType),
-                hostnames: self.getHostNames(self.uniqueId, endpointType)
-            }
+    private isolated function generateApiLabel() returns map<string> {
+        map<string> labels = {
+            "apiName": self.apkConf.name,
+            "version": self.apkConf.version,
+            "basePath": self.apkConf.basePath,
+            "defaultVersion": self.apkConf.defaultVersion.toString()
         };
-        return httpRoute;
+        if self.apkConf.environment is string {
+            labels["environment"] = <string>self.apkConf.environment;
+        }
+        if self.apkConf.definitionPath is string {
+            labels["definitionPath"] = <string>self.apkConf.definitionPath;
+        }
+        return labels;
     }
 
     // Generate http route rules
@@ -138,7 +181,7 @@ class GatewayModel {
         model:HTTPRouteRule[] httpRouteRules = [];
         if operations is APKOperations[] {
             foreach APKOperations operation in operations {
-                model:HTTPRouteRule? httpRouteRule = check self.generateRouteRule(operation, endpoint, endpointType);
+                model:HTTPRouteRule|model:GRPCRouteRule? httpRouteRule = check self.generateRouteRule(operation, endpoint, endpointType, API_TYPE_REST);
                 if httpRouteRule is model:HTTPRouteRule {
                     httpRouteRules.push(httpRouteRule);
                 }
@@ -147,8 +190,22 @@ class GatewayModel {
         return httpRouteRules;
     }
 
+    // Generate grpc route rules
+    private isolated function generateGRPCRouteRules(APKOperations[]? operations, model:Endpoint? endpoint, string endpointType) returns model:GRPCRouteRule[]|commons:APKError {
+        model:GRPCRouteRule[] grpcRouteRules = [];
+        if operations is APKOperations[] {
+            foreach APKOperations operation in operations {
+                model:HTTPRouteRule|model:GRPCRouteRule? grpcRouteRule = check self.generateRouteRule(operation, endpoint, endpointType, API_TYPE_GRPC);
+                if grpcRouteRule is model:GRPCRouteRule {
+                    grpcRouteRules.push(grpcRouteRule);
+                }
+            }
+        }
+        return grpcRouteRules;
+    }
+
     // Generate http route rule
-    private isolated function generateRouteRule(APKOperations operation, model:Endpoint? endpoint, string endpointType) returns model:HTTPRouteRule|()|commons:APKError {
+    private isolated function generateRouteRule(APKOperations operation, model:Endpoint? endpoint, string endpointType, string apiType) returns model:HTTPRouteRule|model:GRPCRouteRule|()|commons:APKError {
         do {
             EndpointConfigurations? endpointConfig = operation.endpointConfigurations;
             model:Endpoint? endpointToUse = ();
@@ -163,17 +220,27 @@ class GatewayModel {
                 }
             }
             if endpointToUse != () {
-                model:HTTPRouteFilter[] filters = [];
-                boolean hasRedirectPolicy = false;
-                [filters, hasRedirectPolicy] = self.generateFilters(endpointToUse, operation, endpointType);
-                model:HTTPRouteRule httpRouteRule = {
-                    matches: check self.retrieveHTTPMatches(operation, endpointType),
-                    filters: filters
-                };
-                if !hasRedirectPolicy {
-                    httpRouteRule.backendRefs = self.retrieveGeneratedBackendRefs(endpointToUse, endpointType);
+                if apiType == API_TYPE_REST {
+                    model:HTTPRouteFilter[] filters = [];
+                    boolean hasRedirectPolicy = false;
+                    [filters, hasRedirectPolicy] = self.generateFilters(endpointToUse, operation, endpointType);
+                    model:HTTPRouteRule httpRouteRule = {
+                        matches: check self.retrieveHTTPMatches(operation, endpointType),
+                        filters
+                    };
+                    if !hasRedirectPolicy {
+                        httpRouteRule.backendRefs = self.retrieveGeneratedBackendRefs(endpointToUse, endpointType);
+                    }
+                    return httpRouteRule;
+                } else if apiType == API_TYPE_GRPC {
+                    model:GRPCRouteRule grpcRouteRule = {
+                        matches: check self.retrieveGRPCMatches(operation, endpointType),
+                        backendRefs: self.retrieveGeneratedBackendRefs(endpointToUse, endpointType)
+                    };
+                    return grpcRouteRule;
+                } else {
+                    return e909018("Invalid API Type specified");
                 }
-                return httpRouteRule;
             } else {
                 return ();
             }
@@ -191,9 +258,28 @@ class GatewayModel {
         return httpRouteMatch;
     }
 
+    // Retrieve the GRPC matches for a given operation
+    private isolated function retrieveGRPCMatches(APKOperations operation, string endpointType) returns model:GRPCRouteMatch[]|error {
+        model:GRPCRouteMatch[] grpcRouteMatch = [];
+        model:GRPCRouteMatch grpcRoute = self.retrieveGrpcRouteMatch(operation);
+        grpcRouteMatch.push(grpcRoute);
+        return grpcRouteMatch;
+    }
+
     // Retrieve the HTTP match for a given operation
     private isolated function retrieveHttpRouteMatch(APKOperations operation) returns model:HTTPRouteMatch {
         return {method: <string>operation.verb, path: {'type: "RegularExpression", value: self.retrievePathPrefix(operation.target ?: "/*", self.apkConf.basePath)}};
+    }
+
+    // Retrieve the GRPC match for a given operation
+    private isolated function retrieveGrpcRouteMatch(APKOperations operation) returns model:GRPCRouteMatch {
+        return {
+            method: {
+                'type: "Exact",
+                'service: <string>operation.target,
+                method: <string>operation.verb
+            }
+        };
     }
 
     // Retrieve the prepared path prefix

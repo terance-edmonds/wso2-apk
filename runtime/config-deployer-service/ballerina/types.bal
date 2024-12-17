@@ -600,6 +600,8 @@ public type ConfigMapRef record {
 # + version - The version of the gateway model artifact.
 # + productionHttpRoutes - The HTTP routes for the production environment.
 # + sandboxHttpRoutes - The HTTP routes for the sandbox environment.
+# + productionGrpcRoutes - The gRPC routes for the production environment.
+# + sandboxGrpcRoutes - The gRPC routes for the sandbox environment.
 # + namespace - The namespace of the gateway model artifact.
 # + organization - The organization of the gateway model artifact.
 # + uniqueId - The unique ID of the gateway model artifact.
@@ -608,6 +610,8 @@ public type GatewayModelArtifact record {
     string 'version;
     model:HTTPRoute[] productionHttpRoutes = [];
     model:HTTPRoute[] sandboxHttpRoutes = [];
+    model:GRPCRoute[] productionGrpcRoutes = [];
+    model:GRPCRoute[] sandboxGrpcRoutes = [];
     string namespace?;
     string organization;
     string uniqueId;
@@ -617,6 +621,7 @@ public type GatewayModelArtifact record {
 #
 # + rateLimits - Array of Kong rate limit plugins.
 # + authentications - Array of Kong authentication plugins.
+# + cors - Configuration for the Kong CORS plugin.
 public type KongGatewayArtifact record {
     *GatewayModelArtifact;
     KongRateLimitPlugin[] rateLimits = [];
@@ -865,4 +870,64 @@ public type KongCorsPlugin record {|
     *KongPlugin;
     string plugin = "cors";
     KongCorsPluginConfig config;
+|};
+
+# Configuration for Kong request transformer advanced plugin remove attribute.
+#
+# + body - Array of type string
+# + headers - Array of type string
+# + querystring - Array of type string
+public type KongRTAPluginRemoveConfig record {|
+    string[] body?;
+    string[] headers?;
+    string[] querystring?;
+|};
+
+# Configuration for Kong request transformer advanced plugin referenceable config.
+#
+# + body - Array of type string, referenceable
+# + headers - Array of type string, referenceable
+# + querystring - Array of type string, referenceable
+# + json_types - Array of type string, must be one of: boolean, number, string
+public type KongRTAPluginReferenceConfig record {|
+    string[] body?;
+    string[] headers?;
+    string[] querystring?;
+    string[] json_types?;
+|};
+
+# Configuration for Kong request transformer advanced plugin allow attribute.
+#
+# + body - A map containing a set of type string.
+public type KongRTAPluginAllowConfig record {|
+    map<string> body?;
+|};
+
+# Configuration for Kong request transformer advanced plugin.
+#
+# + http_method - The HTTP method to be transformed.
+# + remove - Configuration for removing attributes.
+# + replace - Configuration for replacing attributes.
+# + add - Configuration for adding attributes.
+# + append - Configuration for appending attributes.
+# + allow - Configuration for allowing attributes.
+# + dots_in_keys - Flag to allow dots in keys.
+public type KongRTAPluginConfig record {|
+    string http_method = "^%u+$";
+    KongRTAPluginRemoveConfig remove?;
+    KongRTAPluginReferenceConfig replace?;
+    KongRTAPluginReferenceConfig add?;
+    KongRTAPluginReferenceConfig append?;
+    KongRTAPluginAllowConfig allow?;
+    boolean dots_in_keys = true;
+|};
+
+# Kong request transformer advanced plugin.
+#
+# + plugin - The name of the plugin, which is "request-transformer-advanced".
+# + config - The configuration for the Kong request transformer advanced plugin.
+public type KongRequestTransformerAdvancedPlugin record {|
+    *KongPlugin;
+    string plugin = "request-transformer-advanced";
+    KongRTAPluginConfig config;
 |};

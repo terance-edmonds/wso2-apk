@@ -1,6 +1,8 @@
 import config_deployer_service.model;
 
 import ballerina/crypto;
+import ballerina/file;
+import ballerina/uuid;
 
 import wso2/apk_common_lib as commons;
 
@@ -23,7 +25,7 @@ public class GatewayKong {
         self.gatewayModel = new (self.apkConf, self.apiDefinition, self.organization, self.gatewayConfig);
     }
 
-    public isolated function generateK8sArtifacts() returns string|commons:APKError|error {
+    public isolated function generateK8sArtifacts() returns commons:APKError|KongGatewayArtifact {
         do {
             string[] plugins = [];
             // Prepare K8s gateway specifics
@@ -51,14 +53,50 @@ public class GatewayKong {
             kongGatewayArtifact.productionHttpRoutes = self.setHttpRoutePluginAnnotations(kongGatewayArtifact.productionHttpRoutes, plugins);
             kongGatewayArtifact.sandboxHttpRoutes = self.setHttpRoutePluginAnnotations(kongGatewayArtifact.sandboxHttpRoutes, plugins);
 
-            return kongGatewayArtifact.toJsonString();
+            return kongGatewayArtifact;
         }
         on fail var e {
             if e is commons:APKError {
                 return e;
             }
-            return e;
+            return e909022("Internal Error occurred while generating k8s-artifact", e);
         }
+    }
+
+    public isolated function zipAPIArtifact(string apiId, KongGatewayArtifact kongArtifact) returns [string, string]|error {
+        string zipDir = check file:createTempDir(uuid:createType1AsString());
+        foreach KongAuthenticationPlugin authenticationCr in kongArtifact.authentications {
+            string yamlString = check convertJsonToYaml(authenticationCr.toJsonString());
+            _ = check storeFile(yamlString, authenticationCr.metadata.name, zipDir);
+        }
+        foreach model:HTTPRoute httpRoute in kongArtifact.productionHttpRoutes {
+            string yamlString = check convertJsonToYaml(httpRoute.toJsonString());
+            _ = check storeFile(yamlString, httpRoute.metadata.name, zipDir);
+        }
+        foreach model:HTTPRoute httpRoute in kongArtifact.sandboxHttpRoutes {
+            string yamlString = check convertJsonToYaml(httpRoute.toJsonString());
+            _ = check storeFile(yamlString, httpRoute.metadata.name, zipDir);
+        }
+        foreach model:GRPCRoute grpcRoute in kongArtifact.productionGrpcRoutes {
+            string yamlString = check convertJsonToYaml(grpcRoute.toJsonString());
+            _ = check storeFile(yamlString, grpcRoute.metadata.name, zipDir);
+        }
+        foreach model:GRPCRoute grpcRoute in kongArtifact.sandboxGrpcRoutes {
+            string yamlString = check convertJsonToYaml(grpcRoute.toJsonString());
+            _ = check storeFile(yamlString, grpcRoute.metadata.name, zipDir);
+        }
+        foreach KongRateLimitPlugin rateLimitPolicy in kongArtifact.rateLimits {
+            string yamlString = check convertJsonToYaml(rateLimitPolicy.toJsonString());
+            _ = check storeFile(yamlString, rateLimitPolicy.metadata.name, zipDir);
+        }
+        KongCorsPlugin? kongCorsPlugin = kongArtifact.cors;
+        if kongCorsPlugin is KongCorsPlugin {
+            string yamlString = check convertJsonToYaml(kongCorsPlugin.toJsonString());
+            _ = check storeFile(yamlString, kongCorsPlugin.metadata.name, zipDir);
+        }
+        string zipfileName = string:concat(kongArtifact.name, "-", kongArtifact.'version);
+        [string, string] zipName = check zipDirectory(zipfileName, zipDir);
+        return zipName;
     }
 
     private isolated function generateKongGatewayArtifact(GatewayModelArtifact gatewayModelArtifact) returns KongGatewayArtifact {
